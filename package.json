@@ -1,0 +1,21 @@
+{
+  "name": "ironmind",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI mental performance coach for wrestlers",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter worker --filter frontend dev",
+    "build": "pnpm --filter worker build && pnpm --filter frontend build",
+    "deploy": "pnpm --filter worker deploy && pnpm --filter frontend deploy",
+    "typecheck": "pnpm --recursive typecheck",
+    "lint": "pnpm --recursive lint"
+  },
+  "workspaces": [
+    "worker",
+    "frontend"
+  ]
+}
