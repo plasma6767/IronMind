@@ -53,6 +53,8 @@ export class AthleteObject implements DurableObject {
         return this.handleSessionComplete(request);
       case "/challenge/score":
         return this.handleChallengeScore(request);
+      case "/set-voice-model-id":
+        return this.handleSetVoiceModelId(request);
       default:
         return new Response("Not found", { status: 404 });
     }
@@ -81,6 +83,12 @@ export class AthleteObject implements DurableObject {
     const current = (await this.getAll()) ?? ({} as AthleteData);
     const merged: AthleteData = { ...current, ...updates };
     await this.state.storage.put("athlete", merged);
+  }
+
+  private async handleSetVoiceModelId(request: Request): Promise<Response> {
+    const { voiceModelId } = await request.json<{ voiceModelId: string }>();
+    await this.setVoiceModelId(voiceModelId);
+    return Response.json({ ok: true });
   }
 
   async setVoiceModelId(voiceModelId: string): Promise<void> {
