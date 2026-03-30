@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc --noEmit",
+    "build": "node_modules/.bin/tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
   },
