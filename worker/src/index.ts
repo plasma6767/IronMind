@@ -4,9 +4,19 @@ import type { Env, SessionContext, SessionState } from "./types";
 import { AthleteObject } from "./durable/AthleteObject";
 import { buildSystemPrompt, buildCutMessagePrompt } from "./prompts/index";
 import { callClaude } from "./lib/claude";
+import { cloneVoice, synthesizeSpeech } from "./lib/elevenlabs";
 
 // Re-export Durable Object class (required by Wrangler)
 export { AthleteObject };
+
+// Compute a hex SHA-256 digest using the Web Crypto API (available in Workers)
+async function sha256Hex(text: string): Promise<string> {
+  const encoded = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -101,13 +111,80 @@ app.post("/llm-endpoint", async (c) => {
 // ─── Voice / TTS ──────────────────────────────────────────────────────────────
 
 app.post("/tts", async (c) => {
-  // TODO: Phase 3 — accept { text, athleteId }, call ElevenLabs TTS with voice_model_id
-  return c.json({ error: "not implemented" }, 501);
+  let body: { text?: string; athleteId?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (!body.text || !body.athleteId) {
+    return c.json({ error: "text and athleteId required" }, 400);
+  }
+
+  // Resolve which voice to use: athlete's cloned voice, or fallback
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<import("./types").AthleteData>();
+  const voiceId = athleteData?.identity?.voiceModelId ?? c.env.ELEVENLABS_FALLBACK_VOICE_ID;
+
+  // Build an R2 cache key: tts/{voiceId}/{sha256(text)}
+  const textHash = await sha256Hex(body.text);
+  const cacheKey = `tts/${voiceId}/${textHash}`;
+
+  // Check R2 cache first
+  const cached = await c.env.AUDIO_CACHE.get(cacheKey);
+  if (cached) {
+    const audio = await cached.arrayBuffer();
+    return new Response(audio, {
+      headers: { "Content-Type": "audio/mpeg", "X-Cache": "HIT" },
+    });
+  }
+
+  // Cache miss — call ElevenLabs
+  const audio = await synthesizeSpeech(c.env, body.text, voiceId);
+
+  // Write to R2 before responding so the buffer isn't detached
+  await c.env.AUDIO_CACHE.put(cacheKey, audio, {
+    httpMetadata: { contentType: "audio/mpeg" },
+  });
+
+  return new Response(audio, {
+    headers: { "Content-Type": "audio/mpeg", "X-Cache": "MISS" },
+  });
 });
 
+// POST /voice-clone?athleteId=xxx
+// Body: raw audio bytes (Content-Type: audio/mpeg or audio/wav)
+// ElevenLabs requires at least ~30 seconds of clear speech for a good clone.
 app.post("/voice-clone", async (c) => {
-  // TODO: Phase 3 — accept audio blob, call ElevenLabs clone API, store voice_model_id
-  return c.json({ error: "not implemented" }, 501);
+  const athleteId = c.req.query("athleteId");
+  if (!athleteId) {
+    return c.json({ error: "athleteId query param required" }, 400);
+  }
+
+  const contentType = c.req.header("Content-Type") ?? "audio/mpeg";
+  const audioBuffer = await c.req.arrayBuffer();
+  if (audioBuffer.byteLength === 0) {
+    return c.json({ error: "audio body required" }, 400);
+  }
+
+  // Fetch athlete name for the ElevenLabs voice label
+  const stub = getAthleteStub(c.env, athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<import("./types").AthleteData>();
+  const athleteName = athleteData?.identity?.name ?? athleteId;
+
+  const audioBlob = new Blob([audioBuffer], { type: contentType });
+  const voiceModelId = await cloneVoice(c.env, athleteName, audioBlob);
+
+  // Store the new voice_model_id in the Durable Object
+  await stub.fetch(new Request("https://do/set-voice-model-id", {
+    method: "POST",
+    body: JSON.stringify({ voiceModelId }),
+  }));
+
+  return c.json({ ok: true, voiceModelId });
 });
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
