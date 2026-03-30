@@ -10,7 +10,7 @@ class_name = "AthleteObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AthleteObject"]
+new_sqlite_classes = ["AthleteObject"]
 
 # ─── R2 Buckets ───────────────────────────────────────────────────────────────
 [[r2_buckets]]
