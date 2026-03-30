@@ -122,4 +122,109 @@ app.post("/generate", async (c) => {
   return c.json({ error: "not implemented" }, 501);
 });
 
+// ─── Phase 1 Smoke Test ───────────────────────────────────────────────────────
+// Seeds a full athlete object and reads it back. Remove after Phase 1 verified.
+
+app.post("/test/seed", async (c) => {
+  const athleteId = "test-athlete-001";
+  const stub = getAthleteStub(c.env, athleteId);
+
+  const testAthlete = {
+    identity: {
+      athleteId,
+      name: "Logan Test",
+      sport: "wrestling",
+      weightClass: 165,
+      naturalWeight: 178,
+      yearsWrestling: 13,
+      style: "folkstyle",
+      voiceModelId: null,
+      mentalArchetype: "competitor",
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString(),
+    },
+    goals: {
+      immediate: "Make weight at 165 for Saturday's dual",
+      seasonal: "Win conference, qualify for NCAAs",
+      proving: "Show I belong at this level after redshirting last year",
+      identity: "Become someone who does not quit when it gets hard",
+      whyThisSport: "Wrestling taught me everything about who I am. I have done this since I was 7.",
+    },
+    currentCut: {
+      startWeight: 178.4,
+      targetWeight: 165.0,
+      competitionDate: new Date(Date.now() + 5 * 86400000).toISOString(),
+      currentWeight: 169.2,
+      lastWeighIn: new Date().toISOString(),
+      cutDay: 3,
+      totalCutDays: 5,
+    },
+    wrestlingProfile: {
+      strengths: ["top pressure", "front headlock", "conditioning"],
+      weaknesses: ["slow off feet", "stall when tired"],
+      mentalTriggers: {
+        cutSpecific: "checking scale and not being down enough",
+        matchSpecific: "getting taken down first",
+        practiceSpecific: "bad week before a big tournament",
+      },
+    },
+    sessions: [],
+    mentalPatterns: {
+      avgQuitMinute: null,
+      quitTriggers: [],
+      strongMinutes: [],
+      breakthroughCount: 0,
+      currentStreak: 0,
+      longestStreak: 0,
+      totalSessions: 0,
+      lastComparableCutSummary: null,
+    },
+    mindsetTraining: {
+      challengeStreak: 0,
+      scores: {
+        pressureTolerance: 5.0,
+        focusControl: 5.0,
+        identityStability: 5.0,
+        discomfortTolerance: 5.0,
+        adversityResponse: 5.0,
+      },
+      weakestDimension: "discomfortTolerance",
+      strongestDimension: "identityStability",
+      challengeHistory: [],
+    },
+    identityAnchors: [
+      "Started wrestling at age 7",
+      "Cut 15 pounds for regionals freshman year and won",
+      "D1 athlete — one of approximately 2 percent who made it this far",
+      "Redshirted last year watching from the sideline — chose to come back",
+    ],
+    upcomingOpponent: {
+      name: "Jake Reynolds",
+      school: "App State",
+      record: "18-4",
+      tendencies: "Heavy double leg, slow starter, gasses after minute 4",
+      lastMeetingResult: "Loss by decision at conference",
+      psychologicalNotes: "Relies on physicality, struggles when pace breaks early",
+    },
+  };
+
+  await stub.fetch(new Request("https://do/set", {
+    method: "POST",
+    body: JSON.stringify(testAthlete),
+  }));
+
+  // Read it back and return
+  const res = await stub.fetch(new Request("https://do/get"));
+  const saved = await res.json();
+
+  return c.json({ seeded: true, athleteId, data: saved });
+});
+
+app.get("/test/read", async (c) => {
+  const stub = getAthleteStub(c.env, "test-athlete-001");
+  const res = await stub.fetch(new Request("https://do/get"));
+  const data = await res.json();
+  return c.json(data);
+});
+
 export default app;
