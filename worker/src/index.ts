@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env } from "./types";
+import type { Env, SessionContext, SessionState } from "./types";
 import { AthleteObject } from "./durable/AthleteObject";
+import { buildSystemPrompt, buildCutMessagePrompt } from "./prompts/index";
+import { callClaude } from "./lib/claude";
 
 // Re-export Durable Object class (required by Wrangler)
 export { AthleteObject };
@@ -118,8 +120,40 @@ app.post("/onboarding/message", async (c) => {
 // ─── Generate (direct Claude call — used in Phase 2 testing) ─────────────────
 
 app.post("/generate", async (c) => {
-  // TODO: Phase 2 — read DO, build prompt, call Claude via AI Gateway, return text
-  return c.json({ error: "not implemented" }, 501);
+  const body = await c.req.json<{
+    athleteId: string;
+    sessionState?: SessionState;
+    sessionMinute?: number;
+    lastAthleteMessage?: string;
+  }>();
+
+  if (!body.athleteId) {
+    return c.json({ error: "athleteId required" }, 400);
+  }
+
+  // Read athlete from Durable Object
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<import("./types").AthleteData>();
+
+  if (!athleteData) {
+    return c.json({ error: "athlete not found" }, 404);
+  }
+
+  const ctx: SessionContext = {
+    athleteId: body.athleteId,
+    sessionMinute: body.sessionMinute ?? 0,
+    sessionState: body.sessionState ?? "EARLY",
+    lastAthleteMessage: body.lastAthleteMessage ?? null,
+    challengesThisSession: [],
+  };
+
+  const systemPrompt = buildSystemPrompt(athleteData, ctx);
+  const userPrompt = buildCutMessagePrompt(athleteData, ctx);
+
+  const message = await callClaude(c.env, systemPrompt, userPrompt);
+
+  return c.json({ message, sessionState: ctx.sessionState, sessionMinute: ctx.sessionMinute });
 });
 
 // ─── Phase 1 Smoke Test ───────────────────────────────────────────────────────
