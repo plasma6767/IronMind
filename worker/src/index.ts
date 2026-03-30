@@ -111,7 +111,12 @@ app.post("/llm-endpoint", async (c) => {
 // ─── Voice / TTS ──────────────────────────────────────────────────────────────
 
 app.post("/tts", async (c) => {
-  const body = await c.req.json<{ text: string; athleteId: string }>();
+  let body: { text?: string; athleteId?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
 
   if (!body.text || !body.athleteId) {
     return c.json({ error: "text and athleteId required" }, 400);
@@ -139,12 +144,10 @@ app.post("/tts", async (c) => {
   // Cache miss — call ElevenLabs
   const audio = await synthesizeSpeech(c.env, body.text, voiceId);
 
-  // Store in R2 (fire-and-forget — don't block the response)
-  c.executionCtx.waitUntil(
-    c.env.AUDIO_CACHE.put(cacheKey, audio.slice(0), {
-      httpMetadata: { contentType: "audio/mpeg" },
-    })
-  );
+  // Write to R2 before responding so the buffer isn't detached
+  await c.env.AUDIO_CACHE.put(cacheKey, audio, {
+    httpMetadata: { contentType: "audio/mpeg" },
+  });
 
   return new Response(audio, {
     headers: { "Content-Type": "audio/mpeg", "X-Cache": "MISS" },
