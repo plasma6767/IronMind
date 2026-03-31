@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Env } from "../types";
+import type { Env } from "../env";
 
 // Calls Claude through Cloudflare AI Gateway.
 // The gateway URL already has /anthropic at the end — the SDK appends the rest.

@@ -7,8 +7,8 @@ import Reset from "./screens/Reset";
 import Settings from "./screens/Settings";
 
 export default function App() {
-  // TODO: replace with real auth/onboarding check
-  const isOnboarded = false;
+  // Phase 7 will wire real onboarding check — hardcoded true so dashboard is reachable
+  const isOnboarded = true;
 
   return (
     <BrowserRouter>

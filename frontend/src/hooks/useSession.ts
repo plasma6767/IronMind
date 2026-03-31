@@ -1,57 +1,142 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { SessionState } from "../../../worker/src/types";
 
-interface SessionHookState {
-  sessionMinute: number;
+interface SessionData {
+  sessionId: string | null;
   sessionState: SessionState;
-  isAgentSpeaking: boolean;
+  elapsed: number;       // seconds since session started (client-side timer)
   currentWeight: number;
   targetWeight: number;
   isActive: boolean;
 }
 
-// TODO: Phase 4
-// - POST /api/session/start to initialize session on the Worker
-// - Poll or use SSE/WebSocket for 90-second message events
-// - Play audio blobs returned from /api/tts
-// - Track sessionMinute locally (increment every 60s)
-// - Derive sessionState from sessionMinute + DO avgQuitMinute
+interface ServerSessionSnapshot {
+  sessionMinute: number;
+  sessionState: SessionState;
+  messageSeq: number;
+  pendingMessage: string | null;
+  currentWeight: number | null;
+  targetWeight: number | null;
+}
 
-export function useSession(athleteId: string): SessionHookState & {
+export function useSession(
+  athleteId: string,
+  onNewMessage: (text: string) => void
+): SessionData & {
   startSession: () => Promise<void>;
   endSession: () => Promise<void>;
 } {
-  const [state, setState] = useState<SessionHookState>({
-    sessionMinute: 0,
+  const [state, setState] = useState<SessionData>({
+    sessionId: null,
     sessionState: "EARLY",
-    isAgentSpeaking: false,
+    elapsed: 0,
     currentWeight: 0,
     targetWeight: 0,
     isActive: false,
   });
 
-  useEffect(() => {
-    if (!state.isActive) return;
+  const lastSeqRef = useRef(0);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-    const interval = setInterval(() => {
+  // Keep onNewMessage stable across re-renders without re-creating poll
+  const onNewMessageRef = useRef(onNewMessage);
+  useEffect(() => { onNewMessageRef.current = onNewMessage; }, [onNewMessage]);
+
+  const stopTimers = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+  }, []);
+
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/session/${athleteId}/current`);
+      if (!res.ok) return;
+      const data = await res.json() as ServerSessionSnapshot;
+
       setState((prev) => ({
         ...prev,
-        sessionMinute: prev.sessionMinute + 1,
+        sessionState: data.sessionState,
+        currentWeight: data.currentWeight ?? prev.currentWeight,
+        targetWeight: data.targetWeight ?? prev.targetWeight,
       }));
-    }, 60_000);
 
-    return () => clearInterval(interval);
-  }, [state.isActive]);
+      if (data.messageSeq > lastSeqRef.current && data.pendingMessage) {
+        lastSeqRef.current = data.messageSeq;
+        onNewMessageRef.current(data.pendingMessage);
+      }
+    } catch {
+      // Network hiccup — try again next tick
+    }
+  }, [athleteId]);
 
   const startSession = useCallback(async () => {
-    // TODO: POST /api/session/start
-    setState((prev) => ({ ...prev, isActive: true }));
-  }, []);
+    // Abort any in-flight previous start (handles React StrictMode double-invoke)
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // Clear any leftover timers from a cancelled start
+    stopTimers();
+
+    const res = await fetch("/api/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ athleteId }),
+      signal: controller.signal,
+    });
+
+    // If this start was cancelled by a subsequent call, bail out
+    if (controller.signal.aborted) return;
+    if (!res.ok) throw new Error("Failed to start session");
+
+    const data = await res.json() as {
+      sessionId: string;
+      sessionState: SessionState;
+      currentWeight: number | null;
+      targetWeight: number | null;
+    };
+
+    lastSeqRef.current = 0;
+
+    setState((prev) => ({
+      ...prev,
+      sessionId: data.sessionId,
+      sessionState: data.sessionState,
+      elapsed: 0,
+      currentWeight: data.currentWeight ?? prev.currentWeight,
+      targetWeight: data.targetWeight ?? prev.targetWeight,
+      isActive: true,
+    }));
+
+    timerRef.current = setInterval(() => {
+      setState((prev) => ({ ...prev, elapsed: prev.elapsed + 1 }));
+    }, 1_000);
+
+    pollingRef.current = setInterval(poll, 3_000);
+  }, [athleteId, poll, stopTimers]);
 
   const endSession = useCallback(async () => {
-    // TODO: POST /api/session/end
+    abortRef.current?.abort();
+    stopTimers();
+
+    await fetch("/api/session/end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ athleteId }),
+    }).catch(() => {}); // best-effort — don't throw on unmount
+
     setState((prev) => ({ ...prev, isActive: false }));
-  }, []);
+  }, [athleteId, stopTimers]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      stopTimers();
+    };
+  }, [stopTimers]);
 
   return { ...state, startSession, endSession };
 }

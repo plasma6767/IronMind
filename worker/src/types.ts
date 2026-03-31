@@ -148,20 +148,6 @@ export interface AthleteData {
   upcomingOpponent: UpcomingOpponent | null;
 }
 
-// ─── Worker Bindings ──────────────────────────────────────────────────────────
-
-export interface Env {
-  ATHLETE_DO: DurableObjectNamespace;
-  AUDIO_CACHE: R2Bucket;
-  ANTHROPIC_API_KEY: string;
-  CF_AI_GATEWAY_URL: string;
-  ELEVENLABS_API_KEY: string;
-  ELEVENLABS_FALLBACK_VOICE_ID: string;
-  CLAUDE_MODEL: string;
-  ELEVENLABS_TTS_MODEL: string;
-  ENVIRONMENT: string;
-}
-
 // ─── Request / Response Shapes ────────────────────────────────────────────────
 
 // ElevenLabs custom LLM endpoint — incoming request format
@@ -180,6 +166,20 @@ export interface ElevenLabsLLMResponse {
     message: { role: "assistant"; content: string };
     finish_reason: "stop";
   }>;
+}
+
+// In-progress session stored in the Durable Object during an active cut
+export interface ActiveSession {
+  sessionId: string;
+  athleteId: string;
+  startedAt: string;             // ISO8601
+  sessionMinute: number;         // advances 1.5 per 90-second alarm tick
+  sessionState: SessionState;
+  challengesThisSession: ChallengeType[];
+  lastAthleteMessage: string | null;
+  pendingMessage: string | null; // latest Claude message (frontier polls this)
+  messageSeq: number;            // increments with each new message; frontend detects changes
+  lastMessageAt: string | null;  // ISO8601
 }
 
 // Session context passed around during an active cut session

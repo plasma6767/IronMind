@@ -1,24 +1,33 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import WeightDisplay from "../components/WeightDisplay";
+import type { AthleteData } from "../../../worker/src/types";
+
+const ATHLETE_ID = localStorage.getItem("athleteId") ?? "test-athlete-001";
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [athlete, setAthlete] = useState<AthleteData | null>(null);
 
-  // TODO: Phase 4 — load athlete data from /api/athlete/:id
-  const athlete = null as null | { name: string; currentWeight: number; targetWeight: number; competitionDate: string };
+  useEffect(() => {
+    fetch(`/api/athlete/${ATHLETE_ID}`)
+      .then((r) => r.json() as Promise<AthleteData>)
+      .then(setAthlete)
+      .catch(console.error);
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background px-6 py-10">
       <h1 className="text-xl font-semibold text-primary mb-1">
-        {athlete?.name ?? "IronMind"}
+        {athlete?.identity?.name ?? "IronMind"}
       </h1>
 
       {/* Current cut status */}
-      {athlete && (
+      {athlete?.currentCut && (
         <WeightDisplay
-          currentWeight={athlete.currentWeight}
-          targetWeight={athlete.targetWeight}
-          competitionDate={athlete.competitionDate}
+          currentWeight={athlete.currentCut.currentWeight}
+          targetWeight={athlete.currentCut.targetWeight}
+          competitionDate={athlete.currentCut.competitionDate}
         />
       )}
 

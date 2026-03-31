@@ -8,31 +8,32 @@ interface PushToTalkProps {
 // Tap and hold to speak. Release to send. Zero false triggers.
 export default function PushToTalk({ onSpeech, disabled = false }: PushToTalkProps) {
   const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null);
 
   const startListening = useCallback(() => {
     if (disabled) return;
 
-    const SpeechRecognition =
-      window.SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition: typeof SpeechRecognition }).webkitSpeechRecognition;
+    const SpeechRecognitionCtor: typeof SpeechRecognition =
+      window.SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition: typeof SpeechRecognition }).webkitSpeechRecognition;
 
-    if (!SpeechRecognition) {
+    if (!SpeechRecognitionCtor) {
       // TODO: Phase 3 — fall back to ElevenLabs microphone capture
       console.warn("SpeechRecognition not available");
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognitionCtor();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-US";
 
-    recognition.onresult = (e) => {
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
       const transcript = e.results[0]?.[0]?.transcript ?? "";
       if (transcript) onSpeech(transcript);
     };
 
-    recognition.onerror = (e) => console.error("Speech recognition error:", e.error);
+    recognition.onerror = (e: SpeechRecognitionErrorEvent) => console.error("Speech recognition error:", e.error);
 
     recognitionRef.current = recognition;
     recognition.start();

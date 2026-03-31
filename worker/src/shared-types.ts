@@ -1,0 +1,28 @@
+// Re-exports all pure domain types for frontend consumption.
+// Excludes Env (which references CF-specific DurableObjectNamespace / R2Bucket).
+export type {
+  WrestlingStyle,
+  MentalArchetype,
+  SessionMode,
+  SessionState,
+  ChallengeType,
+  ResetTrigger,
+  ProtocolPhase,
+  Identity,
+  Goals,
+  CurrentCut,
+  MentalTriggers,
+  WrestlingProfile,
+  ChallengeScore,
+  Session,
+  MentalPatterns,
+  MindsetScores,
+  ChallengeHistoryEntry,
+  MindsetTraining,
+  UpcomingOpponent,
+  AthleteData,
+  ElevenLabsLLMRequest,
+  ElevenLabsLLMResponse,
+  ActiveSession,
+  SessionContext,
+} from "./types";

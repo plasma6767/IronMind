@@ -1,4 +1,4 @@
-import type { Env } from "../types";
+import type { Env } from "../env";
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 

@@ -1,22 +1,15 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, SessionContext, SessionState } from "./types";
+import type { SessionContext, SessionState } from "./types";
+import type { Env } from "./env";
 import { AthleteObject } from "./durable/AthleteObject";
 import { buildSystemPrompt, buildCutMessagePrompt } from "./prompts/index";
 import { callClaude } from "./lib/claude";
 import { cloneVoice, synthesizeSpeech } from "./lib/elevenlabs";
+import { sha256Hex } from "./lib/crypto";
 
 // Re-export Durable Object class (required by Wrangler)
 export { AthleteObject };
-
-// Compute a hex SHA-256 digest using the Web Crypto API (available in Workers)
-async function sha256Hex(text: string): Promise<string> {
-  const encoded = new TextEncoder().encode(text);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -55,18 +48,54 @@ app.post("/athlete/:id", async (c) => {
 // ─── Session ──────────────────────────────────────────────────────────────────
 
 app.post("/session/start", async (c) => {
-  // TODO: Phase 4 — initialize session, schedule first DO alarm
-  return c.json({ error: "not implemented" }, 501);
+  let body: { athleteId?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON" }, 400); }
+  if (!body.athleteId) return c.json({ error: "athleteId required" }, 400);
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/session/start", {
+    method: "POST",
+    body: JSON.stringify({ athleteId: body.athleteId }),
+  }));
+
+  if (!res.ok) return c.json({ error: await res.text() }, 500);
+  return c.json(await res.json());
 });
 
 app.post("/session/end", async (c) => {
-  // TODO: Phase 4 — finalize session, write Session record to DO
-  return c.json({ error: "not implemented" }, 501);
+  let body: { athleteId?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON" }, 400); }
+  if (!body.athleteId) return c.json({ error: "athleteId required" }, 400);
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  await stub.fetch(new Request("https://do/session/end", { method: "POST" }));
+  return c.json({ ok: true });
 });
 
+// Push-to-talk: athlete speaks, agent responds immediately
 app.post("/session/message", async (c) => {
-  // TODO: Phase 4 — generate next cut companion message (called by DO alarm)
-  return c.json({ error: "not implemented" }, 501);
+  let body: { athleteId?: string; message?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON" }, 400); }
+  if (!body.athleteId || !body.message) {
+    return c.json({ error: "athleteId and message required" }, 400);
+  }
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/session/athlete-message", {
+    method: "POST",
+    body: JSON.stringify({ message: body.message }),
+  }));
+
+  if (!res.ok) return c.json({ error: await res.text() }, 500);
+  return c.json(await res.json());
+});
+
+// Polling endpoint — frontend checks every 3 seconds for new alarm-generated messages
+app.get("/session/:athleteId/current", async (c) => {
+  const stub = getAthleteStub(c.env, c.req.param("athleteId"));
+  const res = await stub.fetch(new Request("https://do/session/current"));
+  if (res.status === 404) return c.json({ error: "no active session" }, 404);
+  return c.json(await res.json());
 });
 
 // ─── Mindset Challenges ───────────────────────────────────────────────────────
