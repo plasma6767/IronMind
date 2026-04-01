@@ -129,6 +129,13 @@ export default function App() {
                   localStorage.removeItem("athleteId");
                   setAppState({ phase: "auth" });
                 }}
+                onRedoOnboarding={() => {
+                  // Profile reset already called by Settings; just update routing state.
+                  setAppState({
+                    phase: "onboarding",
+                    athleteId: (appState as { phase: "home"; athleteId: string }).athleteId,
+                  });
+                }}
               />
             ) : <Navigate to="/" replace />
           }

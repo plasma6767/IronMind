@@ -1,4 +1,5 @@
 import type { AthleteData, Session, MentalPatterns, MindsetTraining, MindsetScores } from "../types";
+import { mergeProfileLearning, type ProfileLearningUpdates } from "../lib/profileLearning";
 
 const DEFAULT_MENTAL_PATTERNS: MentalPatterns = {
   avgQuitMinute: null,
@@ -57,6 +58,10 @@ export class AthleteObject implements DurableObject {
         return this.handleSetVoiceModelId(request);
       case "/session/evaluate":
         return this.handleSessionEvaluate(request);
+      case "/reset":
+        return this.handleReset();
+      case "/profile-learn":
+        return this.handleProfileLearn(request);
       default:
         return new Response("Not found", { status: 404 });
     }
@@ -98,6 +103,15 @@ export class AthleteObject implements DurableObject {
     if (!data) return;
     data.identity.voiceModelId = voiceModelId;
     await this.state.storage.put("athlete", data);
+  }
+
+  // ─── Profile Reset ─────────────────────────────────────────────────────────
+  // Clears all stored athlete data so the athlete is routed through onboarding
+  // again on their next app launch. Auth credentials are NOT affected.
+
+  private async handleReset(): Promise<Response> {
+    await this.state.storage.delete("athlete");
+    return Response.json({ ok: true });
   }
 
   // ─── Session Completion ────────────────────────────────────────────────────
@@ -185,6 +199,24 @@ export class AthleteObject implements DurableObject {
     data.mindsetTraining = training;
     await this.state.storage.put("athlete", data);
     return training.scores;
+  }
+
+  // ─── Profile Learning ─────────────────────────────────────────────────────
+  // Intelligently merges qualitative signals extracted from a conversation
+  // transcript into the athlete's persistent profile. Arrays are deduplicated;
+  // string fields are only overwritten when a non-null value is supplied.
+
+  private async handleProfileLearn(request: Request): Promise<Response> {
+    const updates = await request.json<ProfileLearningUpdates>();
+    await this.applyProfileLearning(updates);
+    return Response.json({ ok: true });
+  }
+
+  private async applyProfileLearning(updates: ProfileLearningUpdates): Promise<void> {
+    const data = await this.getAll();
+    if (!data) return;
+    const merged = mergeProfileLearning(data, updates);
+    await this.state.storage.put("athlete", merged);
   }
 
   // ─── Derived Patterns ─────────────────────────────────────────────────────

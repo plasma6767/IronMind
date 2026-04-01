@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "build": "node_modules/.bin/tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
     "typescript": "^5.5.0",
+    "vitest": "^1.6.1",
     "wrangler": "^3.80.0"
   }
 }
