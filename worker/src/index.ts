@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import type { Env, SessionContext, SessionState, AthleteData, ElevenLabsLLMRequest, ElevenLabsLLMResponse, ConversationMode } from "./types";
 import { AthleteObject } from "./durable/AthleteObject";
 import { AuthObject } from "./durable/AuthObject";
-import { buildSystemPrompt, buildCutMessagePrompt, buildConversationalSystemPrompt, buildOnboardingExtractionPrompt, buildSessionEvaluationPrompt } from "./prompts/index";
+import { buildSystemPrompt, buildCutMessagePrompt, buildConversationalSystemPrompt, buildOnboardingExtractionPrompt, buildSessionEvaluationPrompt, buildProfileLearningPrompt } from "./prompts/index";
 import { callClaude, callClaudeWithHistory, streamClaudeWithHistory } from "./lib/claude";
 import { cloneVoice, synthesizeSpeech } from "./lib/elevenlabs";
 
@@ -101,6 +101,14 @@ app.post("/athlete/:id", async (c) => {
     method: "POST",
     body: JSON.stringify(body),
   }));
+  return c.json({ ok: true });
+});
+
+// Reset athlete profile — clears all stored athlete data so the athlete re-onboards.
+// Auth credentials are preserved; only the Durable Object profile is wiped.
+app.post("/athlete/:id/reset", async (c) => {
+  const stub = getAthleteStub(c.env, c.req.param("id"));
+  await stub.fetch(new Request("https://do/reset", { method: "POST" }));
   return c.json({ ok: true });
 });
 
@@ -213,6 +221,70 @@ app.post("/session/evaluate", async (c) => {
     reasoning: typeof deltas.reasoning === "string" ? deltas.reasoning : null,
     scores,
   });
+});
+
+// POST /session/learn
+// Called after every session. Sends the transcript to Claude to extract
+// qualitative profile updates (identity anchors, goal refinements, mental
+// triggers, strengths/weaknesses) and merges them into the athlete's DO.
+// Runs independently of /session/evaluate — both fire in parallel from the client.
+app.post("/session/learn", async (c) => {
+  let body: {
+    athleteId: string;
+    transcript: Array<{ role: string; content: string }>;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  // Need at least a few exchanges to extract anything meaningful
+  if (!body.athleteId || !Array.isArray(body.transcript) || body.transcript.length < 4) {
+    return c.json({ ok: true, skipped: "insufficient transcript length" });
+  }
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<AthleteData | null>();
+
+  if (!athleteData?.identity?.name) {
+    return c.json({ ok: true, skipped: "no athlete data" });
+  }
+
+  const systemPrompt = buildProfileLearningPrompt(
+    athleteData,
+    body.transcript as Array<{ role: "user" | "assistant"; content: string }>
+  );
+
+  let rawJson: string;
+  try {
+    rawJson = await callClaude(c.env, systemPrompt, "", 500);
+  } catch (err) {
+    console.error("[session/learn] Claude call failed:", err);
+    return c.json({ ok: true, skipped: "claude error" });
+  }
+
+  const cleaned = rawJson
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  let updates: unknown;
+  try {
+    updates = JSON.parse(cleaned);
+  } catch {
+    console.error("[session/learn] Parse failed:", rawJson);
+    return c.json({ ok: true, skipped: "parse error" });
+  }
+
+  await stub.fetch(new Request("https://do/profile-learn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  }));
+
+  return c.json({ ok: true });
 });
 
 app.post("/session/start", async (c) => {

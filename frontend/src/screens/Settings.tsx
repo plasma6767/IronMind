@@ -3,7 +3,20 @@ import { useNavigate } from "react-router-dom";
 
 // Local types — mirrors worker/src/types.ts but without Cloudflare-specific bindings
 interface AthleteData {
-  identity: { name: string };
+  identity: {
+    name: string;
+    weightClass: number;
+    naturalWeight: number;
+    style: string;
+    mentalArchetype: string | null;
+  };
+  goals: {
+    immediate: string;
+    seasonal: string;
+    proving: string;
+    identity: string;
+    whyThisSport: string;
+  } | null;
   currentCut: {
     startWeight: number;
     currentWeight: number;
@@ -30,6 +43,8 @@ interface AthleteData {
   };
 }
 
+// ─── Display helpers ──────────────────────────────────────────────────────────
+
 const DIMENSION_LABELS: Record<string, string> = {
   pressureTolerance:   "Pressure Tolerance",
   focusControl:        "Focus Control",
@@ -38,18 +53,47 @@ const DIMENSION_LABELS: Record<string, string> = {
   adversityResponse:   "Adversity Response",
 };
 
+const STYLE_LABELS: Record<string, string> = {
+  folkstyle: "Folkstyle",
+  freestyle: "Freestyle",
+  greco:     "Greco-Roman",
+};
+
+const ARCHETYPE_LABELS: Record<string, string> = {
+  competitor: "Competitor",
+  craftsman:  "Craftsman",
+  warrior:    "Warrior",
+};
+
+const GOAL_LABELS: Array<{ key: keyof NonNullable<AthleteData["goals"]>; label: string }> = [
+  { key: "immediate",    label: "Immediate goal" },
+  { key: "seasonal",     label: "Season goal" },
+  { key: "proving",      label: "What you're proving" },
+  { key: "identity",     label: "Who you are as an athlete" },
+  { key: "whyThisSport", label: "Why this sport" },
+];
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface SettingsProps {
   athleteId: string;
   onSignOut: () => void;
+  onRedoOnboarding: () => void;
 }
 
-export default function Settings({ athleteId, onSignOut }: SettingsProps) {
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: SettingsProps) {
   const navigate = useNavigate();
 
   const [athleteData, setAthleteData] = useState<AthleteData | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Redo-onboarding confirmation state — requires two deliberate taps
+  const [isConfirmingReset, setIsConfirmingReset] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   // ── Cut fields ───────────────────────────────────────────────────────────────
   const [currentWeight, setCurrentWeight] = useState("");
@@ -103,7 +147,7 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
     const cw = parseFloat(currentWeight);
     const tw = parseFloat(targetWeight);
 
-    // Build the full currentCut object so shallow merge in DO doesn't drop fields
+    // Build the full currentCut object — shallow merge in DO would otherwise drop fields
     const updatedCut: AthleteData["currentCut"] = athleteData.currentCut
       ? {
           ...athleteData.currentCut,
@@ -124,7 +168,7 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
           }
         : null;
 
-    // Build full opponent object
+    // Build full opponent object so no fields are silently dropped
     const updatedOpponent: AthleteData["upcomingOpponent"] = opponentName.trim()
       ? {
           name: opponentName.trim(),
@@ -136,20 +180,15 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
         }
       : athleteData.upcomingOpponent;
 
-    const updates: Partial<AthleteData> = {
-      currentCut: updatedCut,
-      upcomingOpponent: updatedOpponent,
-    };
-
     try {
       const res = await fetch(`/api/athlete/${encodeURIComponent(athleteId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({ currentCut: updatedCut, upcomingOpponent: updatedOpponent }),
       });
       if (!res.ok) throw new Error("Save failed");
 
-      // Refresh local state so mindset scores stay up to date
+      // Refresh local state so mindset scores and derived values stay in sync
       const refreshed = await fetch(`/api/athlete/${encodeURIComponent(athleteId)}`);
       const updated = (await refreshed.json()) as AthleteData | null;
       if (updated) setAthleteData(updated);
@@ -163,7 +202,20 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
     }
   }
 
-  // ── Mindset scores ───────────────────────────────────────────────────────────
+  // ── Redo onboarding ──────────────────────────────────────────────────────────
+
+  async function handleRedoOnboarding() {
+    setIsResetting(true);
+    try {
+      await fetch(`/api/athlete/${encodeURIComponent(athleteId)}/reset`, { method: "POST" });
+      onRedoOnboarding(); // App routing state update — navigates to /onboarding
+    } catch {
+      setIsResetting(false);
+      setIsConfirmingReset(false);
+    }
+  }
+
+  // ── Derived display values ───────────────────────────────────────────────────
 
   const scores = athleteData?.mindsetTraining?.scores;
   const weakest = athleteData?.mindsetTraining?.weakestDimension;
@@ -186,6 +238,52 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
       </div>
 
       <div className="flex flex-col gap-8 px-6 py-8 pb-16">
+
+        {/* ── Profile ─────────────────────────────────────────────────────────── */}
+        <section>
+          <p className="text-muted text-xs uppercase tracking-widest mb-4">Profile</p>
+          {athleteData ? (
+            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-3">
+              <ProfileRow label="Name" value={athleteData.identity.name} />
+              <ProfileRow label="Weight class" value={`${athleteData.identity.weightClass} lbs`} />
+              <ProfileRow label="Natural weight" value={`${athleteData.identity.naturalWeight} lbs`} />
+              <ProfileRow
+                label="Style"
+                value={STYLE_LABELS[athleteData.identity.style] ?? athleteData.identity.style}
+              />
+              {athleteData.identity.mentalArchetype && (
+                <ProfileRow
+                  label="Mental archetype"
+                  value={ARCHETYPE_LABELS[athleteData.identity.mentalArchetype] ?? athleteData.identity.mentalArchetype}
+                />
+              )}
+            </div>
+          ) : (
+            <p className="text-muted text-sm">Loading...</p>
+          )}
+        </section>
+
+        {/* ── Goals ───────────────────────────────────────────────────────────── */}
+        {athleteData?.goals && (
+          <section>
+            <p className="text-muted text-xs uppercase tracking-widest mb-4">Goals</p>
+            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4">
+              {GOAL_LABELS.map(({ key, label }) => {
+                const value = athleteData.goals![key];
+                if (!value) return null;
+                return (
+                  <div key={key}>
+                    <p className="text-muted text-xs mb-1">{label}</p>
+                    <p className="text-primary text-sm leading-relaxed">{value}</p>
+                  </div>
+                );
+              })}
+              <p className="text-muted text-xs mt-1">
+                Goals are set during onboarding. Use "Redo Onboarding" below to update them.
+              </p>
+            </div>
+          </section>
+        )}
 
         {/* ── Mindset Profile ─────────────────────────────────────────────────── */}
         <section>
@@ -336,6 +434,45 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
           {isSaving ? "Saving..." : saveSuccess ? "Saved" : "Save Changes"}
         </button>
 
+        {/* ── Redo Onboarding ──────────────────────────────────────────────────── */}
+        <section>
+          <p className="text-muted text-xs uppercase tracking-widest mb-4">Account</p>
+          <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-3">
+            <div>
+              <p className="text-primary text-sm font-medium">Redo Onboarding</p>
+              <p className="text-muted text-xs mt-1">
+                Clears your profile and restarts the voice interview. Your sessions and mindset history will be lost.
+              </p>
+            </div>
+
+            {isConfirmingReset ? (
+              <div className="flex gap-3 pt-1">
+                <button
+                  className="flex-1 py-2.5 border border-border rounded-xl text-muted text-sm"
+                  onClick={() => setIsConfirmingReset(false)}
+                  disabled={isResetting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="flex-1 py-2.5 border border-red-500 text-red-400 rounded-xl text-sm disabled:opacity-50"
+                  onClick={handleRedoOnboarding}
+                  disabled={isResetting}
+                >
+                  {isResetting ? "Resetting..." : "Yes, reset"}
+                </button>
+              </div>
+            ) : (
+              <button
+                className="py-2.5 border border-border rounded-xl text-muted text-sm w-full"
+                onClick={() => setIsConfirmingReset(true)}
+              >
+                Redo Onboarding
+              </button>
+            )}
+          </div>
+        </section>
+
         {/* ── Sign Out ─────────────────────────────────────────────────────────── */}
         <button
           className="w-full py-3 text-muted text-sm"
@@ -343,7 +480,19 @@ export default function Settings({ athleteId, onSignOut }: SettingsProps) {
         >
           Sign Out
         </button>
+
       </div>
+    </div>
+  );
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function ProfileRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-muted text-sm">{label}</span>
+      <span className="text-primary text-sm font-medium">{value}</span>
     </div>
   );
 }

@@ -441,6 +441,93 @@ Return ONLY valid JSON, no markdown fences, no explanation outside the JSON:
 }`;
 }
 
+// ─── Profile Learning Prompt ──────────────────────────────────────────────────
+
+// Called after every session. Claude scans the transcript for qualitative
+// profile signals — identity anchors, goal refinements, mental triggers,
+// strengths/weaknesses — that should be persisted beyond this conversation.
+export function buildProfileLearningPrompt(
+  data: AthleteData,
+  transcript: Array<{ role: "user" | "assistant"; content: string }>
+): string {
+  const { identity, goals, wrestlingProfile, identityAnchors } = data;
+
+  // Render current profile fields so Claude only extracts what's genuinely NEW
+  const currentAnchors = identityAnchors.length
+    ? identityAnchors.map((a) => `  - "${a}"`).join("\n")
+    : "  (none yet)";
+
+  const currentTriggers = `
+  - Cut: ${wrestlingProfile.mentalTriggers.cutSpecific}
+  - Match: ${wrestlingProfile.mentalTriggers.matchSpecific}
+  - Practice: ${wrestlingProfile.mentalTriggers.practiceSpecific}`.trim();
+
+  const conversationText = transcript
+    .map((t) => `${t.role === "assistant" ? "Coach" : identity.name}: ${t.content}`)
+    .join("\n");
+
+  return `You are extracting new profile information from a live coaching conversation with a wrestler.
+
+CURRENT PROFILE — only add information that is genuinely new or more specific than what is already here.
+
+Athlete: ${identity.name}
+Existing goals:
+  Immediate: ${goals.immediate}
+  Season: ${goals.seasonal}
+  Proving: ${goals.proving}
+  Identity: ${goals.identity}
+  Why they wrestle: ${goals.whyThisSport}
+Existing strengths: ${wrestlingProfile.strengths.join(", ") || "none logged"}
+Existing weaknesses: ${wrestlingProfile.weaknesses.join(", ") || "none logged"}
+Existing mental triggers:
+${currentTriggers}
+Existing identity anchors:
+${currentAnchors}
+
+CONVERSATION TRANSCRIPT:
+${conversationText}
+
+WHAT TO EXTRACT — only from the athlete's own statements, not the coach's words:
+
+IDENTITY ANCHORS: Specific moments, facts, or truths the athlete stated about who they are.
+  Good: "I've never quit on a teammate in five years" — a specific, concrete fact
+  Bad: "I'm mentally tough" — a vague trait
+  Bad: inferring an anchor from context the athlete didn't directly state
+
+GOAL UPDATES: Only if the athlete clearly stated something more specific or different from their existing goals.
+
+MENTAL TRIGGERS: Anything specific they revealed about what breaks their focus or confidence during cuts, matches, or practice.
+
+STRENGTHS / WEAKNESSES: Skills or patterns they mentioned as areas they're good at or actively improving.
+
+RULES:
+- Evidence must come from a direct athlete statement
+- Do not infer or assume
+- Do not repeat information already in the current profile above
+- If nothing new was found in a field, use null or []
+
+Return ONLY a valid JSON object — no markdown fences, no explanation:
+{
+  "identityAnchors": [],
+  "goals": {
+    "immediate": null,
+    "seasonal": null,
+    "proving": null,
+    "identity": null,
+    "whyThisSport": null
+  },
+  "wrestlingProfile": {
+    "strengths": [],
+    "weaknesses": [],
+    "mentalTriggers": {
+      "cutSpecific": null,
+      "matchSpecific": null,
+      "practiceSpecific": null
+    }
+  }
+}`;
+}
+
 // ─── Onboarding Data Extraction ───────────────────────────────────────────────
 
 // System prompt for the extraction pass after onboarding completes.

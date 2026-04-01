@@ -159,16 +159,24 @@ export default function Home({ athleteId }: { athleteId: string }) {
     // Need enough turns for meaningful signal
     if (transcript.length < 4) return;
 
+    // Fire both post-session Claude passes in parallel:
+    // - evaluate: score deltas (blocks Done button, shows updated rating)
+    // - learn: qualitative profile updates (silent, no UI change needed)
+    const sessionPayload = { athleteId, transcript, mode, durationSeconds: sessionDuration };
+
     setEvaluating(true);
+
+    // Profile learning runs silently — no UI dependency
+    fetch("/api/session/learn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ athleteId, transcript }),
+    }).catch(() => {});
+
     fetch("/api/session/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        athleteId,
-        transcript,
-        mode,
-        durationSeconds: sessionDuration,
-      }),
+      body: JSON.stringify(sessionPayload),
     })
       .then((r) => r.json() as Promise<{
         ok: boolean;
