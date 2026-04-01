@@ -21,14 +21,6 @@ export type ChallengeType =
   | "identity_challenge"
   | "visualization_lock";
 
-export type ResetTrigger = "loss" | "bad_practice" | "spiral" | "confidence_dip";
-
-export type ProtocolPhase =
-  | "breathing"
-  | "visualization"
-  | "identity_reinforcement"
-  | "ignition";
-
 // ─── Durable Object Schema ────────────────────────────────────────────────────
 
 export interface Identity {
@@ -149,8 +141,6 @@ export interface AthleteData {
   mindsetTraining: MindsetTraining;
   identityAnchors: string[];
   upcomingOpponent: UpcomingOpponent | null;
-  // Set at session start via /signed-url so the LLM endpoint knows which mode is active
-  activeSessionMode?: ConversationMode;
 }
 
 // ─── Worker Bindings ──────────────────────────────────────────────────────────
@@ -189,11 +179,3 @@ export interface ElevenLabsLLMResponse {
   }>;
 }
 
-// Session context passed around during an active cut session
-export interface SessionContext {
-  athleteId: string;
-  sessionMinute: number;
-  sessionState: SessionState;
-  lastAthleteMessage: string | null;
-  challengesThisSession: ChallengeType[];
-}
