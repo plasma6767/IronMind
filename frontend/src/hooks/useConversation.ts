@@ -3,6 +3,7 @@ import { Conversation } from "@11labs/client";
 import type { Mode, Status } from "@11labs/client";
 
 export type ConversationStatus = Status | "idle" | "error";
+export type ConversationMode = "workout" | "general" | "prematch" | "postmatch";
 
 export interface TranscriptEntry {
   role: "user" | "assistant";
@@ -13,42 +14,63 @@ interface UseConversationReturn {
   status: ConversationStatus;
   agentMode: Mode | null;
   transcript: TranscriptEntry[];
-  start: () => Promise<void>;
+  getVolume: () => number;
+  sessionDuration: number;
+  unexpectedDisconnect: boolean;
+  start: (mode?: ConversationMode) => Promise<void>;
   end: () => Promise<void>;
+  reset: () => void;
 }
 
 export function useConversation(athleteId: string): UseConversationReturn {
   const [status, setStatus] = useState<ConversationStatus>("idle");
   const [agentMode, setAgentMode] = useState<Mode | null>(null);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const conversationRef = useRef<Conversation | null>(null);
+  const [sessionDuration, setSessionDuration] = useState(0);
+  const [unexpectedDisconnect, setUnexpectedDisconnect] = useState(false);
 
-  const start = useCallback(async () => {
-    if (conversationRef.current) return; // already active
+  const conversationRef = useRef<Conversation | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
+  const intentionalEndRef = useRef(false);
+
+  const getVolume = useCallback((): number => {
+    return conversationRef.current?.getOutputVolume() ?? 0;
+  }, []);
+
+  const start = useCallback(async (mode?: ConversationMode) => {
+    if (conversationRef.current) return;
 
     setStatus("connecting");
     setTranscript([]);
+    setSessionDuration(0);
+    setUnexpectedDisconnect(false);
+    intentionalEndRef.current = false;
 
     try {
-      console.log("[IronMind] Fetching signed URL for", athleteId);
-      const res = await fetch(`/api/signed-url?athleteId=${encodeURIComponent(athleteId)}`);
-      console.log("[IronMind] Signed URL response status:", res.status);
+      const params = new URLSearchParams({ athleteId });
+      if (mode) params.set("mode", mode);
+
+      const res = await fetch(`/api/signed-url?${params}`);
       if (!res.ok) throw new Error(`Signed URL request failed: ${res.status}`);
       const { signedUrl, firstMessage } = (await res.json()) as { signedUrl: string; firstMessage: string };
-      console.log("[IronMind] Got signed URL, firstMessage:", firstMessage);
 
       const conversation = await Conversation.startSession({
         signedUrl,
         overrides: { agent: { firstMessage } },
         onConnect: () => {
-          console.log("[IronMind] Connected");
+          sessionStartRef.current = Date.now();
           setStatus("connected");
         },
-        onDisconnect: (details) => {
-          console.log("[IronMind] Disconnected:", JSON.stringify(details));
+        onDisconnect: () => {
+          const duration = sessionStartRef.current
+            ? Math.floor((Date.now() - sessionStartRef.current) / 1000)
+            : 0;
+          setSessionDuration(duration);
+          setUnexpectedDisconnect(!intentionalEndRef.current);
           setStatus("disconnected");
           setAgentMode(null);
           conversationRef.current = null;
+          sessionStartRef.current = null;
         },
         onMessage: ({ message, source }) => {
           setTranscript((prev) => [
@@ -60,27 +82,33 @@ export function useConversation(athleteId: string): UseConversationReturn {
           setAgentMode(mode);
         },
         onStatusChange: ({ status: s }) => {
-          console.log("[IronMind] Status change:", s);
           setStatus(s);
         },
         onError: (message, context) => {
-          console.error("[IronMind] ElevenLabs error:", message, context);
+          console.error("[IronMind] Error:", message, context);
           setStatus("error");
         },
       });
 
       conversationRef.current = conversation;
     } catch (err) {
-      console.error("Failed to start conversation:", err);
+      console.error("[IronMind] Failed to start:", err);
       setStatus("error");
     }
   }, [athleteId]);
 
   const end = useCallback(async () => {
     if (!conversationRef.current) return;
+    intentionalEndRef.current = true;
     await conversationRef.current.endSession();
-    conversationRef.current = null;
   }, []);
 
-  return { status, agentMode, transcript, start, end };
+  const reset = useCallback(() => {
+    setStatus("idle");
+    setTranscript([]);
+    setSessionDuration(0);
+    setUnexpectedDisconnect(false);
+  }, []);
+
+  return { status, agentMode, transcript, getVolume, sessionDuration, unexpectedDisconnect, start, end, reset };
 }

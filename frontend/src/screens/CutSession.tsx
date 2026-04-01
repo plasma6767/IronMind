@@ -89,7 +89,7 @@ export default function CutSession() {
         {!isConnected && !isConnecting && (
           <button
             className="w-full py-4 bg-primary text-background rounded-xl font-semibold text-base min-h-touch active:opacity-80"
-            onClick={start}
+            onClick={() => start()}
           >
             Connect
           </button>

@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, SessionContext, SessionState, AthleteData, ElevenLabsLLMRequest, ElevenLabsLLMResponse } from "./types";
+import type { Env, SessionContext, SessionState, AthleteData, ElevenLabsLLMRequest, ElevenLabsLLMResponse, ConversationMode } from "./types";
 import { AthleteObject } from "./durable/AthleteObject";
 import { AuthObject } from "./durable/AuthObject";
-import { buildSystemPrompt, buildCutMessagePrompt, buildConversationalSystemPrompt, buildOnboardingExtractionPrompt } from "./prompts/index";
+import { buildSystemPrompt, buildCutMessagePrompt, buildConversationalSystemPrompt, buildOnboardingExtractionPrompt, buildSessionEvaluationPrompt } from "./prompts/index";
 import { callClaude, callClaudeWithHistory, streamClaudeWithHistory } from "./lib/claude";
 import { cloneVoice, synthesizeSpeech } from "./lib/elevenlabs";
 
@@ -104,10 +104,119 @@ app.post("/athlete/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Patch current weight — merges into currentCut rather than replacing it
+app.patch("/athlete/:id/weight", async (c) => {
+  let body: { currentWeight?: number };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (typeof body.currentWeight !== "number") {
+    return c.json({ error: "currentWeight (number) required" }, 400);
+  }
+
+  const stub = getAthleteStub(c.env, c.req.param("id"));
+  const res = await stub.fetch(new Request("https://do/get"));
+  const data = await res.json<AthleteData | null>();
+
+  if (!data?.currentCut) {
+    return c.json({ error: "no active cut on this athlete" }, 404);
+  }
+
+  const updated: Partial<AthleteData> = {
+    currentCut: {
+      ...data.currentCut,
+      currentWeight: body.currentWeight,
+      lastWeighIn: new Date().toISOString(),
+    },
+  };
+
+  await stub.fetch(new Request("https://do/set", {
+    method: "POST",
+    body: JSON.stringify(updated),
+  }));
+
+  return c.json({ ok: true });
+});
+
 // ─── Session ──────────────────────────────────────────────────────────────────
 
+// POST /session/evaluate
+// Called by the frontend after every session ends.
+// Sends the full transcript to Claude for mindset signal extraction,
+// then applies small score deltas to the athlete's mindsetTraining scores.
+app.post("/session/evaluate", async (c) => {
+  let body: {
+    athleteId: string;
+    transcript: Array<{ role: string; content: string }>;
+    mode: ConversationMode;
+    durationSeconds: number;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  // Need at least a few exchanges to have meaningful signal
+  if (!body.athleteId || !Array.isArray(body.transcript) || body.transcript.length < 4) {
+    return c.json({ ok: true, skipped: "insufficient transcript length" });
+  }
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<AthleteData | null>();
+
+  if (!athleteData?.mindsetTraining) {
+    return c.json({ ok: true, skipped: "no athlete data" });
+  }
+
+  const durationMinutes = Math.max(1, Math.round(body.durationSeconds / 60));
+  const systemPrompt = buildSessionEvaluationPrompt(athleteData, body.mode, durationMinutes);
+
+  const transcriptText = body.transcript
+    .map((m) => `${m.role === "assistant" ? "IronMind" : "Athlete"}: ${m.content}`)
+    .join("\n");
+
+  let rawJson: string;
+  try {
+    rawJson = await callClaude(c.env, systemPrompt, transcriptText, 300);
+  } catch (err) {
+    console.error("Session evaluation Claude call failed:", err);
+    return c.json({ ok: true, skipped: "claude error" });
+  }
+
+  const cleaned = rawJson
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  let deltas: Record<string, number>;
+  try {
+    deltas = JSON.parse(cleaned);
+  } catch {
+    console.error("Session evaluation parse failed:", rawJson);
+    return c.json({ ok: true, skipped: "parse error" });
+  }
+
+  // Apply deltas via AthleteObject — returns updated scores
+  const evalRes = await stub.fetch(new Request("https://do/session/evaluate", {
+    method: "POST",
+    body: JSON.stringify(deltas),
+  }));
+  const { scores } = await evalRes.json<{ ok: boolean; scores: Record<string, number> }>();
+
+  return c.json({
+    ok: true,
+    reasoning: typeof deltas.reasoning === "string" ? deltas.reasoning : null,
+    scores,
+  });
+});
+
 app.post("/session/start", async (c) => {
-  // TODO: Phase 4 — initialize session, schedule first DO alarm
+  // TODO: Phase 8 — initialize session, schedule first DO alarm
   return c.json({ error: "not implemented" }, 501);
 });
 
@@ -185,7 +294,10 @@ async function llmEndpointHandler(c: { req: { query: (k: string) => string | und
   const athleteData = await res.json<AthleteData | null>();
 
   const isOnboarding = !athleteData?.identity?.name;
-  const systemPrompt = buildConversationalSystemPrompt(isOnboarding ? null : athleteData);
+  const systemPrompt = buildConversationalSystemPrompt(
+    isOnboarding ? null : athleteData,
+    athleteData?.activeSessionMode
+  );
 
   const requestBody = body as ElevenLabsLLMRequest & { stream?: boolean };
 
@@ -254,9 +366,35 @@ app.get("/signed-url", async (c) => {
   const athleteData = await athleteRes.json<AthleteData | null>();
   const isOnboarded = !!athleteData?.identity?.name;
 
-  const firstMessage = isOnboarded
-    ? `Hey ${athleteData!.identity.name}, what's going on?`
-    : "Hey, I'm IronMind — tell me your name and what you're training for.";
+  const mode = c.req.query("mode") as ConversationMode | undefined;
+
+  // Persist the selected mode so every LLM turn uses the right system prompt
+  if (mode && isOnboarded) {
+    await stub.fetch(new Request("https://do/set", {
+      method: "POST",
+      body: JSON.stringify({ activeSessionMode: mode }),
+    }));
+  }
+
+  let firstMessage: string;
+  if (!isOnboarded) {
+    firstMessage = "Hey, I'm IronMind — tell me your name and what you're training for.";
+  } else {
+    const name = athleteData!.identity.name;
+    switch (mode) {
+      case "workout":
+        firstMessage = `${name} — what are we training today?`;
+        break;
+      case "prematch":
+        firstMessage = `Let's get you locked in, ${name}. Who are you competing against?`;
+        break;
+      case "postmatch":
+        firstMessage = `${name}, how did it go?`;
+        break;
+      default:
+        firstMessage = `Hey ${name}, what's going on?`;
+    }
+  }
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${c.env.ELEVENLABS_AGENT_ID}`,
@@ -299,10 +437,17 @@ app.post("/onboarding/complete", async (c) => {
     1500
   );
 
+  // Claude sometimes wraps JSON in markdown fences despite instructions — strip them
+  const cleanedJson = rawJson
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
   let profileData: Partial<AthleteData>;
   try {
-    profileData = JSON.parse(rawJson);
-  } catch {
+    profileData = JSON.parse(cleanedJson);
+  } catch (parseErr) {
+    console.error("JSON parse failed. Raw Claude output:", rawJson, "Error:", parseErr);
     return c.json({ error: "Failed to extract athlete profile from conversation — try again" }, 500);
   }
 

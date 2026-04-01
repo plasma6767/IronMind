@@ -6,6 +6,9 @@ export type MentalArchetype = "competitor" | "craftsman" | "warrior";
 
 export type SessionMode = "cut" | "protocol" | "reset";
 
+// The four athlete-selectable session modes shown on the Home screen
+export type ConversationMode = "workout" | "general" | "prematch" | "postmatch";
+
 export type SessionState =
   | "EARLY"
   | "BUILDING"
@@ -146,6 +149,8 @@ export interface AthleteData {
   mindsetTraining: MindsetTraining;
   identityAnchors: string[];
   upcomingOpponent: UpcomingOpponent | null;
+  // Set at session start via /signed-url so the LLM endpoint knows which mode is active
+  activeSessionMode?: ConversationMode;
 }
 
 // ─── Worker Bindings ──────────────────────────────────────────────────────────

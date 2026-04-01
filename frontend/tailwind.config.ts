@@ -25,6 +25,10 @@ export default {
       animation: {
         "waveform-pulse": "waveformPulse 1.2s ease-in-out infinite",
         "mic-active": "micPulse 0.8s ease-in-out infinite",
+        "connect-pulse": "connectPulse 1.5s ease-in-out infinite",
+        "listen-ring": "listenRing 1.2s ease-out infinite",
+        "slide-up": "slideUp 0.3s ease-out forwards",
+        "fade-in": "fadeIn 0.2s ease-out forwards",
       },
       keyframes: {
         waveformPulse: {
@@ -34,6 +38,22 @@ export default {
         micPulse: {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.4" },
+        },
+        connectPulse: {
+          "0%, 100%": { opacity: "1", transform: "scale(1)" },
+          "50%": { opacity: "0.7", transform: "scale(0.98)" },
+        },
+        listenRing: {
+          "0%": { transform: "scale(1)", opacity: "0.6" },
+          "100%": { transform: "scale(1.8)", opacity: "0" },
+        },
+        slideUp: {
+          "0%": { transform: "translateY(100%)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
         },
       },
       // Minimum touch target size for gym use

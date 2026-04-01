@@ -55,6 +55,8 @@ export class AthleteObject implements DurableObject {
         return this.handleChallengeScore(request);
       case "/set-voice-model-id":
         return this.handleSetVoiceModelId(request);
+      case "/session/evaluate":
+        return this.handleSessionEvaluate(request);
       default:
         return new Response("Not found", { status: 404 });
     }
@@ -146,6 +148,43 @@ export class AthleteObject implements DurableObject {
 
     data.mindsetTraining = training;
     await this.state.storage.put("athlete", data);
+  }
+
+  // ─── Session Evaluation (score deltas from transcript analysis) ───────────
+
+  private async handleSessionEvaluate(request: Request): Promise<Response> {
+    const deltas = await request.json<Partial<Record<keyof MindsetScores, number>>>();
+    const updated = await this.applyScoreDeltas(deltas);
+    return Response.json({ ok: true, scores: updated });
+  }
+
+  private async applyScoreDeltas(
+    deltas: Partial<Record<keyof MindsetScores, number>>
+  ): Promise<MindsetScores> {
+    const data = await this.getAll();
+    if (!data) return DEFAULT_MINDSET_SCORES;
+
+    const training = data.mindsetTraining ?? { ...DEFAULT_MINDSET_TRAINING };
+    const keys = Object.keys(DEFAULT_MINDSET_SCORES) as (keyof MindsetScores)[];
+
+    for (const key of keys) {
+      const delta = deltas[key];
+      if (delta === undefined || !isFinite(delta)) continue;
+      // Clamp each session's influence to ±0.5 so no single conversation spikes a score
+      const clamped = Math.max(-0.5, Math.min(0.5, delta));
+      training.scores[key] = Math.round(
+        Math.min(10, Math.max(1, training.scores[key] + clamped)) * 10
+      ) / 10;
+    }
+
+    // Recalculate weakest / strongest after applying deltas
+    const entries = Object.entries(training.scores) as [keyof MindsetScores, number][];
+    training.weakestDimension = entries.reduce((a, b) => (a[1] <= b[1] ? a : b))[0];
+    training.strongestDimension = entries.reduce((a, b) => (a[1] >= b[1] ? a : b))[0];
+
+    data.mindsetTraining = training;
+    await this.state.storage.put("athlete", data);
+    return training.scores;
   }
 
   // ─── Derived Patterns ─────────────────────────────────────────────────────
