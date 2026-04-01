@@ -80,27 +80,33 @@ Build in this sequence. Each phase ends with something testable.
 
 ---
 
-## Phase 6 — UI Polish + Engagement Features
+## Phase 6 — UI Polish + Engagement Features ✅ COMPLETE
 
 **Goal:** The app feels intentional, not minimal. Small features that add real value.
 
 ### Visual Polish
-- [ ] Live transcript — captions that appear while the agent is speaking, fade after a few seconds
-- [ ] Dynamic waveform — reacts to actual audio volume in real time (louder = bigger/faster)
-- [ ] Pulse animation on Connect button while it's in listening state
-- [ ] Post-session summary card — slides up after ending a session (duration, key themes, mindset score delta)
-- [ ] Smooth screen transitions
+- [x] Live transcript — last agent message shown as caption while agent is speaking
+- [x] Dynamic waveform — bar heights driven by `getOutputVolume()` via `requestAnimationFrame` (zero React re-renders during animation)
+- [x] Pulse animation on Connect button while connecting (`animate-connect-pulse`)
+- [x] Listening ring — pulsing rings animate around a dot when agent is in listening mode
+- [x] Post-session summary card — slides up after intentional end (duration + exchange count)
+- [x] New tailwind animations: `connect-pulse`, `listen-ring`, `slide-up`, `fade-in`
 
 ### Home Screen Additions
-- [ ] Weight check-in — quick `+/- 0.5lb` buttons to log today's weight before connecting
-- [ ] Days until competition countdown (derived from `currentCut.competitionDate`)
-- [ ] Session streak display — "7 days in a row" (derived from `mentalPatterns.currentStreak`)
-- [ ] Mood tap before session — three states (struggling / neutral / locked in), influences agent opening
+- [x] Weight check-in — `+/- 0.5lb` buttons, debounced save via `PATCH /athlete/:id/weight`
+- [x] Days until competition countdown (derived from `currentCut.competitionDate`)
+- [x] Session streak display — "N days in a row" (derived from `mentalPatterns.currentStreak`)
+- [x] Mood tap before session — Struggling / Neutral / Locked In, passes `mood` to `/signed-url` which personalizes the first message
 
 ### Quality of Life
-- [ ] Reconnect button when session drops unexpectedly (instead of just resetting to Start)
-- [ ] End session confirmation — "End session?" with Yes/Cancel to prevent accidental hangups
-- [ ] Error state shows actionable message, not just "try again"
+- [x] Reconnect button when session drops unexpectedly (distinct from intentional end)
+- [x] End session confirmation — tap once for "Tap again to end", second tap within 3 seconds ends
+- [x] Error state shows actionable message ("check your connection and try again")
+- [x] `reset()` cleanly returns to idle state from any terminal status
+
+### Backend additions
+- [x] `PATCH /athlete/:id/weight` — deep-merges new weight into `currentCut`, updates `lastWeighIn`
+- [x] `GET /signed-url` mood param — `struggling` / `locked_in` / `neutral` each produce a different opening line
 
 ---
 

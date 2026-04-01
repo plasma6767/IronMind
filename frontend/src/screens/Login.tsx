@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 interface LoginProps {
   onAuth: (athleteId: string) => void;
 }
 
 export default function Login({ onAuth }: LoginProps) {
-  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -44,17 +43,9 @@ export default function Login({ onAuth }: LoginProps) {
       localStorage.setItem("token", data.token);
       localStorage.setItem("athleteId", data.athleteId);
 
-      // Check if athlete has a profile to determine routing
-      const profileRes = await fetch(`/api/athlete/${encodeURIComponent(data.athleteId)}`);
-      const profileData = (await profileRes.json()) as { identity?: { name?: string } } | null;
-
+      // onAuth fetches the profile and updates appState.
+      // Route guards in App.tsx redirect automatically on the next render.
       await onAuth(data.athleteId);
-
-      if (profileData?.identity?.name) {
-        navigate("/home", { replace: true });
-      } else {
-        navigate("/onboarding", { replace: true });
-      }
     } catch {
       setError("Something went wrong — try again");
       setIsLoading(false);

@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 interface SignupProps {
   onAuth: (athleteId: string) => void;
 }
 
 export default function Signup({ onAuth }: SignupProps) {
-  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -49,8 +48,9 @@ export default function Signup({ onAuth }: SignupProps) {
       localStorage.setItem("token", data.token);
       localStorage.setItem("athleteId", data.athleteId);
 
-      onAuth(data.athleteId);
-      navigate("/onboarding", { replace: true });
+      // onAuth fetches the profile and updates appState.
+      // Route guards in App.tsx redirect automatically on the next render.
+      await onAuth(data.athleteId);
     } catch {
       setError("Something went wrong — try again");
       setIsLoading(false);

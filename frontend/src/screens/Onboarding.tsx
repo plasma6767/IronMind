@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import Waveform from "../components/Waveform";
 import { useConversation } from "../hooks/useConversation";
 
-export default function Onboarding({ athleteId }: { athleteId: string }) {
-  const navigate = useNavigate();
+interface OnboardingProps {
+  athleteId: string;
+  onComplete: () => void;
+}
+
+export default function Onboarding({ athleteId, onComplete }: OnboardingProps) {
   const { status, agentMode, transcript, start, end } = useConversation(athleteId);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -33,7 +36,7 @@ export default function Onboarding({ athleteId }: { athleteId: string }) {
         throw new Error(error ?? "Unknown error");
       }
 
-      navigate("/home", { replace: true });
+      onComplete();
     } catch (err) {
       setSaveError(String(err));
       setIsSaving(false);
@@ -74,7 +77,7 @@ export default function Onboarding({ athleteId }: { athleteId: string }) {
         {!isConnected && !isConnecting && !isSaving && (
           <button
             className="w-full py-4 bg-primary text-background rounded-xl font-semibold text-base min-h-touch active:opacity-80"
-            onClick={start}
+            onClick={() => start()}
           >
             Start
           </button>
