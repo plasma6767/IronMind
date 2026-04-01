@@ -1,24 +1,43 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import WeightDisplay from "../components/WeightDisplay";
 
+const ATHLETE_ID = "athlete-001";
+
+interface AthleteProfile {
+  identity: { name: string };
+  currentCut: {
+    currentWeight: number;
+    targetWeight: number;
+    competitionDate: string;
+  } | null;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [athlete, setAthlete] = useState<AthleteProfile | null>(null);
 
-  // TODO: Phase 4 — load athlete data from /api/athlete/:id
-  const athlete = null as null | { name: string; currentWeight: number; targetWeight: number; competitionDate: string };
+  useEffect(() => {
+    fetch(`/api/athlete/${ATHLETE_ID}`)
+      .then((r) => r.json() as Promise<AthleteProfile | null>)
+      .then((data) => {
+        if (data?.identity?.name) setAthlete(data);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background px-6 py-10">
       <h1 className="text-xl font-semibold text-primary mb-1">
-        {athlete?.name ?? "IronMind"}
+        {athlete?.identity.name ?? "IronMind"}
       </h1>
 
       {/* Current cut status */}
-      {athlete && (
+      {athlete?.currentCut && (
         <WeightDisplay
-          currentWeight={athlete.currentWeight}
-          targetWeight={athlete.targetWeight}
-          competitionDate={athlete.competitionDate}
+          currentWeight={athlete.currentCut.currentWeight}
+          targetWeight={athlete.currentCut.targetWeight}
+          competitionDate={athlete.currentCut.competitionDate}
         />
       )}
 
@@ -29,7 +48,7 @@ export default function Dashboard() {
           onClick={() => navigate("/session/cut")}
         >
           <span className="block text-base">Cut session</span>
-          <span className="block text-sm text-muted mt-0.5">90-second loop, voice coach active</span>
+          <span className="block text-sm text-muted mt-0.5">Voice coach, live conversation</span>
         </button>
 
         <button

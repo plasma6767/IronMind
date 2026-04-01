@@ -13,26 +13,26 @@ export default function PushToTalk({ onSpeech, disabled = false }: PushToTalkPro
   const startListening = useCallback(() => {
     if (disabled) return;
 
-    const SpeechRecognition =
-      window.SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition: typeof SpeechRecognition }).webkitSpeechRecognition;
+    type SpeechRecognitionCtor = typeof SpeechRecognition;
+    const SpeechRecognitionCtor: SpeechRecognitionCtor | undefined =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
 
-    if (!SpeechRecognition) {
-      // TODO: Phase 3 — fall back to ElevenLabs microphone capture
+    if (!SpeechRecognitionCtor) {
       console.warn("SpeechRecognition not available");
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognitionCtor();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-US";
 
-    recognition.onresult = (e) => {
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
       const transcript = e.results[0]?.[0]?.transcript ?? "";
       if (transcript) onSpeech(transcript);
     };
 
-    recognition.onerror = (e) => console.error("Speech recognition error:", e.error);
+    recognition.onerror = (e: SpeechRecognitionErrorEvent) => console.error("Speech recognition error:", e.error);
 
     recognitionRef.current = recognition;
     recognition.start();

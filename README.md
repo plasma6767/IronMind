@@ -2,7 +2,7 @@
 
 **AI Mental Performance Coach for Wrestlers**
 
-IronMind is a real-time AI mental performance coach built exclusively for wrestlers. A persistent voice agent that knows your history, understands your psychology, tracks your goals across four emotional layers, and delivers exactly what you need to hear at the exact moment you need it — in your own cloned voice.
+IronMind is a real-time AI mental performance coach built exclusively for wrestlers. A persistent voice agent that knows your history, understands your psychology, tracks your goals, and delivers exactly what you need to hear at the exact moment you need it.
 
 > Built by a D1 wrestler who has lived every moment this product was designed for.
 
@@ -10,30 +10,32 @@ IronMind is a real-time AI mental performance coach built exclusively for wrestl
 
 ## What It Does
 
-Every wrestler has a physical coach, a strength coach, and a film coach. Nobody has a mental performance coach available at 11pm on day 4 of a weight cut — one who knows their history, reads where they are right now, speaks in their own voice, and actively tests and develops their mental skills in the moments when it is hardest.
+Every wrestler has a physical coach, a strength coach, and a film coach. Nobody has a mental performance coach available at 11pm on day 4 of a weight cut — one who knows their history, reads where they are right now, and actively tests and develops their mental skills in the moments when it is hardest.
 
 IronMind is that coach.
+
+The athlete connects via voice. The agent figures out what they need from context — weight cut support, pre-match preparation, post-loss reset, or a general check-in — and responds accordingly. No buttons to pick a mode. No menus. Just connect and talk.
 
 ---
 
 ## Four Pillars
 
 ### 1. The Cut Companion *(Hero Feature)*
-A live session companion during weight cuts. Every 90 seconds the agent fades in with a dynamically generated 10–15 second message calibrated to exactly where the athlete is — by session state, cut day, and historical quit patterns. Push-to-talk activates at any time for direct response.
+A live session companion during weight cuts. The agent delivers dynamically generated messages calibrated to exactly where the athlete is — by session state, cut day, and historical quit patterns.
 
 **Session states:** `EARLY` → `BUILDING` → `PRE_WALL` → `AT_WALL` → `BREAKTHROUGH`
 
 ### 2. Mindset Challenges *(Key Differentiator)*
-At `PRE_WALL` and late-session states, the agent issues live challenges the athlete must answer out loud. Three types:
+At high-stress moments, the agent issues live challenges the athlete must answer out loud. Three types:
 - **Pressure Test** — match scenario walk-through under physical stress
 - **Identity Challenge** — counter specific voiced doubts with earned, specific responses
 - **Visualization Lock** — vivid opponent visualization tested for specificity
 
 ### 3. Pre-Match Protocol
-A 5-minute dynamically generated pre-match ritual in the athlete's cloned voice. Breathing → Visualization → Identity → Ignition. Athlete can interrupt at any phase.
+A dynamically generated pre-match ritual. Breathing → Visualization → Identity → Ignition. Built from the athlete's actual upcoming opponent intel.
 
 ### 4. The Reset Conversation
-Post-loss, bad practice, mental spiral. No music, no timer, no structure. A fully open conversation that follows a specific emotional arc: acknowledge → anchor → ground.
+Post-loss, bad practice, mental spiral. No timer, no structure. A fully open conversation that follows a specific emotional arc: acknowledge → anchor → ground.
 
 ---
 
@@ -44,10 +46,10 @@ Post-loss, bad practice, mental spiral. No music, no timer, no structure. A full
 | Voice layer | ElevenLabs Conversational AI | Real-time voice-to-voice with custom LLM endpoint |
 | Voice cloning | ElevenLabs Voice Clone API | 30-second sample → personal voice model |
 | TTS fallback | ElevenLabs TTS API | Direct audio for non-conversation turns |
-| AI brain | Claude API (Anthropic) | All script and response generation |
-| Edge compute | Cloudflare Workers | Orchestration, custom LLM endpoint, session logic |
-| Persistent memory | Cloudflare Durable Objects | Per-athlete state, history, patterns, goals |
-| API proxy | Cloudflare AI Gateway | Caching, logging, rate-limit protection |
+| AI brain | Claude API (Anthropic) | All response generation via custom LLM endpoint |
+| Edge compute | Cloudflare Workers (Hono) | Orchestration, custom LLM endpoint, session logic |
+| Persistent memory | Cloudflare Durable Objects (SQLite) | Per-athlete state, history, patterns, goals |
+| Auth | Cloudflare Durable Objects | Email + password credentials, session tokens |
 | Audio cache | Cloudflare R2 | Stores generated clips — repeat triggers cost nothing |
 | Frontend | Cloudflare Pages | Global deployment, CI/CD |
 
@@ -55,9 +57,11 @@ Post-loss, bad practice, mental spiral. No music, no timer, no structure. A full
 
 ## Architecture Overview
 
-The critical architectural decision: ElevenLabs Conversational AI supports custom LLM endpoints. Instead of calling Claude directly, it POSTs to the Cloudflare Worker URL. The Worker reads the Durable Object, assembles a full context-aware prompt, calls Claude through AI Gateway, and returns the response. ElevenLabs speaks it in the athlete's cloned voice.
+ElevenLabs Conversational AI supports custom LLM endpoints. Instead of calling Claude directly, it POSTs to the Cloudflare Worker on every conversation turn. The Worker reads the athlete's Durable Object, assembles a full context-aware system prompt, calls Claude, and returns the response. ElevenLabs speaks it in the athlete's voice.
 
-Every response — in any mode, at any moment — is informed by the complete Durable Object history of that athlete. The conversation never starts from zero.
+Every response is informed by the complete Durable Object history of that specific athlete. The conversation never starts from zero.
+
+Each athlete is identified by a SHA-256 hash of their email address, linking their auth credentials to their persistent memory. Auth is handled by a separate `AuthObject` Durable Object storing PBKDF2-hashed passwords and session tokens.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full technical breakdown.
 
@@ -67,57 +71,44 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full technical breakdown.
 
 ```
 ironmind/
-├── worker/                   # Cloudflare Worker — intelligence + orchestration layer
+├── worker/                        # Cloudflare Worker — intelligence + orchestration
 │   ├── src/
-│   │   ├── index.ts          # Worker entry point + routing
-│   │   ├── types.ts          # Shared TypeScript types (Durable Object schema)
+│   │   ├── index.ts               # Worker entry point, routing (Hono)
+│   │   ├── types.ts               # Shared TypeScript interfaces
 │   │   ├── durable/
-│   │   │   └── AthleteObject.ts   # Durable Object — per-athlete persistent memory
-│   │   ├── prompts/
-│   │   │   └── index.ts      # Claude prompt assembly (all four modes)
-│   │   └── routes/
-│   │       ├── llm-endpoint.ts    # Custom LLM endpoint for ElevenLabs
-│   │       ├── session.ts         # Cut session logic + 90s timer
-│   │       ├── challenge.ts       # Mindset challenge evaluation
-│   │       ├── protocol.ts        # Pre-match protocol
-│   │       ├── reset.ts           # Reset conversation handler
-│   │       └── onboarding.ts      # Voice onboarding + DO population
+│   │   │   ├── AthleteObject.ts   # Per-athlete persistent memory (SQLite DO)
+│   │   │   └── AuthObject.ts      # Email/password auth + session tokens
+│   │   ├── lib/
+│   │   │   ├── claude.ts          # Claude API client (streaming + non-streaming)
+│   │   │   ├── elevenlabs.ts      # ElevenLabs TTS + voice clone
+│   │   │   └── auth.ts            # PBKDF2 password hashing
+│   │   └── prompts/
+│   │       └── index.ts           # System prompt assembly (universal + onboarding)
 │   ├── wrangler.toml
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── frontend/                 # Cloudflare Pages — mobile-first dark UI
+├── frontend/                      # Cloudflare Pages — mobile-first dark UI
 │   ├── src/
-│   │   ├── main.tsx
-│   │   ├── App.tsx
+│   │   ├── App.tsx                # Auth state machine (loading→auth→onboarding→home)
 │   │   ├── screens/
-│   │   │   ├── Onboarding.tsx
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── CutSession.tsx
-│   │   │   ├── Protocol.tsx
-│   │   │   ├── Reset.tsx
-│   │   │   └── Settings.tsx
-│   │   ├── components/
-│   │   │   ├── Waveform.tsx
-│   │   │   ├── PushToTalk.tsx
-│   │   │   └── WeightDisplay.tsx
-│   │   └── hooks/
-│   │       ├── useSession.ts
-│   │       └── useVoice.ts
+│   │   │   ├── Login.tsx          # Email + password sign in
+│   │   │   ├── Signup.tsx         # Account creation → onboarding
+│   │   │   ├── Onboarding.tsx     # Voice interview → profile save
+│   │   │   ├── Home.tsx           # Universal agent interface
+│   │   │   └── Settings.tsx       # Profile + configuration
+│   │   ├── hooks/
+│   │   │   └── useConversation.ts # ElevenLabs SDK session management
+│   │   └── components/
+│   │       └── Waveform.tsx       # Animated waveform (agent speaking indicator)
+│   ├── functions/
+│   │   └── api/[[path]].ts        # Pages Function — proxies /api/* to Worker
 │   ├── index.html
 │   ├── vite.config.ts
-│   ├── tailwind.config.ts
-│   └── package.json
+│   └── tailwind.config.ts
 │
-├── .github/
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.md
-│   │   └── feature_request.md
-│   └── PULL_REQUEST_TEMPLATE.md
-│
-├── .env.example
-├── .gitignore
 ├── ARCHITECTURE.md
+├── IMPLEMENTATION.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -130,33 +121,26 @@ ironmind/
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) v18+
-- [pnpm](https://pnpm.io/) v8+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) v3+
-- Cloudflare account with Workers, Durable Objects, R2, AI Gateway, and Pages enabled
+- Node.js v18+
+- pnpm v8+
+- Wrangler CLI v3+
+- Cloudflare account with Workers, Durable Objects, R2, and Pages enabled
 - Anthropic API key
-- ElevenLabs API key
+- ElevenLabs API key + Agent ID
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-org/ironmind.git
 cd ironmind
-
-# Install all dependencies
 pnpm install
-
-# Copy environment variables
-cp .env.example .env
-# Fill in your API keys and Cloudflare config
 ```
 
 ### Local Development
 
 ```bash
-# Run the Worker locally (with Durable Objects + R2 emulated)
-pnpm --filter worker dev
+# Run the Worker locally
+pnpm --filter ironmind-worker dev
 
 # Run the frontend dev server
 pnpm --filter frontend dev
@@ -165,34 +149,27 @@ pnpm --filter frontend dev
 ### Deployment
 
 ```bash
-# Deploy the Worker
-pnpm --filter worker deploy
+# Deploy the Worker (run first — Durable Object migrations)
+pnpm --filter ironmind-worker run deploy
 
-# Deploy the frontend to Cloudflare Pages
-pnpm --filter frontend deploy
+# Deploy the frontend
+cd frontend && pnpm run deploy
 ```
 
----
+### Required Secrets (set via `wrangler secret put`)
 
-## Environment Variables
-
-See [`.env.example`](./.env.example) for the full list of required configuration values.
+```
+ANTHROPIC_API_KEY
+ELEVENLABS_API_KEY
+ELEVENLABS_AGENT_ID
+ELEVENLABS_FALLBACK_VOICE_ID
+```
 
 ---
 
 ## Implementation
 
-The project is broken into 8 sequential phases, each ending with something testable. See [IMPLEMENTATION.md](./IMPLEMENTATION.md) for the full task breakdown.
-
-**Phases at a glance:**
-1. Foundation — Durable Object schema + Worker skeleton
-2. AI Brain — Claude integration via AI Gateway
-3. Voice Layer — ElevenLabs voice clone + TTS + R2 audio cache
-4. Cut Companion — 90-second loop, session state machine, push-to-talk
-5. Mindset Challenges — three challenge types, evaluation logic, scoring
-6. Protocol + Reset + custom LLM endpoint — all four pillars live
-7. Conversational Onboarding — voice interview populates the Durable Object
-8. Frontend Polish + Deploy — production deploy, mobile test
+See [IMPLEMENTATION.md](./IMPLEMENTATION.md) for the full phase-by-phase breakdown including completed work and the roadmap ahead.
 
 ---
 

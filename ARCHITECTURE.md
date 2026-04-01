@@ -2,49 +2,9 @@
 
 ## Overview
 
-IronMind is built on a three-layer architecture: a mobile-first frontend on Cloudflare Pages, an intelligence and orchestration layer on Cloudflare Workers, and per-athlete persistent memory in Cloudflare Durable Objects.
+IronMind is built on three layers: a mobile-first frontend on Cloudflare Pages, an intelligence and orchestration layer on Cloudflare Workers, and per-athlete persistent memory in Cloudflare Durable Objects.
 
-The fundamental design constraint is this: every AI response must be informed by the complete history of that specific athlete. This rules out stateless AI wrappers and requires persistent, low-latency state at the edge.
-
----
-
-## Data Flow — Every 90 Seconds (Cut Session)
-
-```
-Worker session timer fires (t=90s)
-        │
-        ▼
-Read Athlete Durable Object
-  - session state, weight, cut day
-  - quit history, goals, identity anchors
-  - mindset scores, challenge history
-        │
-        ▼
-Calculate session state
-  EARLY → BUILDING → PRE_WALL → AT_WALL → BREAKTHROUGH
-        │
-        ▼
-Decision: deliver message OR fire mindset challenge
-  (driven by sessionState + weakestDimension)
-        │
-        ▼
-Assemble full context prompt
-  (Worker builds dynamically from DO fields)
-        │
-        ▼
-Call Claude via Cloudflare AI Gateway
-        │
-        ├── Standard message → ElevenLabs TTS → Audio → Browser
-        │
-        └── Challenge → Agent speaks → Wait for push-to-talk
-                          │
-                          ▼
-                      Evaluate response
-                      Coach the gap
-                          │
-                          ▼
-                      Update DO (score, assessment, patterns)
-```
+The fundamental design constraint: every AI response must be informed by the complete history of that specific athlete. This rules out stateless AI wrappers and requires persistent, low-latency state at the edge.
 
 ---
 
@@ -52,35 +12,59 @@ Call Claude via Cloudflare AI Gateway
 
 The most important architectural decision in the product.
 
-ElevenLabs Conversational AI supports plugging in a custom LLM endpoint. By default, ElevenLabs calls Claude directly — with zero knowledge of the athlete. IronMind replaces that direct connection with a Cloudflare Worker URL.
+ElevenLabs Conversational AI supports a custom LLM endpoint. Instead of calling Claude directly, it POSTs to the Cloudflare Worker on every conversation turn. The Worker reads the athlete's Durable Object, assembles a full context-aware system prompt, calls Claude with the full conversation history, and returns a streaming SSE response. ElevenLabs speaks the response.
 
 ```
-ElevenLabs Conversational AI
-        │
-        │  POST /llm-endpoint
-        │  { transcript, conversation_history }
-        ▼
+Athlete speaks
+      │
+      ▼
+ElevenLabs (STT → conversation history)
+      │
+      │  POST /llm-endpoint
+      │  { messages: [...], stream: true }
+      ▼
 Cloudflare Worker
-        │
-        ├── Read full Durable Object (athlete context)
-        ├── Select mode prompt (cut / protocol / reset / onboarding)
-        ├── Assemble complete context-aware prompt
-        ├── Call Claude via AI Gateway
-        └── Return response in ElevenLabs expected JSON format
+      │
+      ├── Read athleteId from request body
+      ├── Read full AthleteObject Durable Object
+      ├── Build universal system prompt (cut / pre-match / reset / check-in)
+      ├── Filter system-role messages (ElevenLabs sends them, Claude rejects them)
+      ├── Stream Claude response as SSE
+      └── Return OpenAI-compatible chat.completion.chunk format
                 │
                 ▼
-        ElevenLabs speaks response
-        in athlete's cloned voice
+        ElevenLabs TTS → audio → athlete
 ```
 
-Without this pattern: generic AI with no memory.
-With it: every word informed by everything IronMind knows about this athlete.
+Without this pattern: generic AI with no memory of the athlete.
+With it: every word informed by everything IronMind knows about that athlete.
+
+---
+
+## Auth System
+
+Every athlete account is linked to an email address. The `athleteId` is derived deterministically from the email via SHA-256, ensuring credentials and athlete data are always consistent.
+
+```
+Signup:
+  email → SHA-256 → athleteId (truncated to 32 chars)
+  password → PBKDF2 (100k iterations, SHA-256, random 32-byte salt) → hash
+  AuthObject stores: { email, passwordHash, salt, athleteId }
+  AuthObject issues: session token (random hex)
+
+Login:
+  email → look up AuthObject → verify PBKDF2 hash → issue new session token
+  Frontend stores: token + athleteId in localStorage
+  App routes to /home or /onboarding based on whether DO has identity.name
+```
+
+Auth lives in a separate `AuthObject` Durable Object, keyed by email. One AuthObject per email address. One AthleteObject per athleteId (derived from email hash).
 
 ---
 
 ## Durable Object — Per-Athlete Memory
 
-One Durable Object per athlete. This is the entire memory of IronMind.
+One `AthleteObject` per athlete. This is the entire memory of IronMind.
 
 ```
 AthleteObject
@@ -95,15 +79,57 @@ AthleteObject
 └── upcomingOpponent  — name, school, record, tendencies, psychological notes
 ```
 
-**Why Durable Objects specifically:**
+**Why Durable Objects:**
 - Per-athlete state requires consistent identity — not eventual consistency across replicas
 - Sub-100ms reads required for real-time audio generation
-- Stateful session logic (90-second timer, session state machine) needs a single authoritative location
-- No other serverless primitive solves both consistent identity and low-latency simultaneously
+- No connection pooling, no latency to an external DB — runs inside Cloudflare
+- Each athlete is fully isolated in their own instance
 
 ---
 
-## Session State Machine
+## Onboarding Flow
+
+Voice conversation → Claude extraction → structured profile saved to DO.
+
+```
+New athlete signs up
+      │
+      ▼
+Onboarding screen — ElevenLabs voice conversation
+  Agent asks: name, weight class, goals, mental triggers,
+              identity anchors, upcoming opponent, why this sport
+      │
+      ▼  (athlete taps "I'm Ready" after 8+ turns)
+POST /onboarding/complete { athleteId, transcript }
+      │
+      ▼
+Single Claude call: buildOnboardingExtractionPrompt
+  Full transcript → structured JSON (all DO fields)
+      │
+      ▼
+AthleteObject.set(profileData)
+      │
+      ▼
+Navigate to /home
+  Returning sessions: agent greets by name, context-aware from first word
+```
+
+---
+
+## Universal Agent System Prompt
+
+The agent is not mode-specific. One system prompt handles all contexts. Claude infers from conversation content whether the athlete needs cut support, pre-match prep, post-loss recovery, or a general check-in.
+
+The system prompt includes:
+- Full identity, goals, current cut status
+- Wrestling profile, mental triggers, identity anchors
+- Session history, mindset scores, streak data
+- Upcoming opponent intel
+- Behavioral rules for each context type
+
+---
+
+## Session State Machine (Cut Companion — Phase 8)
 
 ```
 EARLY (minutes 1–8)
@@ -122,109 +148,82 @@ BREAKTHROUGH (past wall, still going)
     Acknowledge what they just did — fuel the finish
 ```
 
-`avgQuitMinute` from the Durable Object drives `PRE_WALL` timing. IronMind doesn't wait for the athlete to start spiraling — it gets in front of it.
+`avgQuitMinute` from the Durable Object drives `PRE_WALL` timing. IronMind doesn't wait for the spiral — it gets in front of it.
 
 ---
 
-## Prompt Assembly
+## Frontend Architecture
 
-Prompts are never static. The Worker assembles them dynamically before every Claude call by reading live Durable Object fields.
+Cloudflare Pages hosting a Vite + React SPA. Optimized for phone use in gym environments.
 
-```typescript
-// Conceptual structure — see worker/src/prompts/index.ts for full implementation
-buildPrompt(athleteData: AthleteObject, mode: Mode, context: SessionContext) {
-  // System prompt: identity, goals, history, rules
-  // Mode-specific prompt: current moment context
-  // Goal selection: driven by sessionState
-  // Challenge context: weakestDimension, previous challenges this session
-}
+**App State Machine:**
+```
+loading → (check localStorage + fetch profile)
+    ├── no token/id → auth (show Login)
+    ├── token + no profile → onboarding
+    └── token + profile → home
 ```
 
-**Goal layer selection:**
-| State | Goal Layer Used |
+**Screens:**
+| Screen | Purpose |
 |---|---|
-| EARLY / BUILDING | `goals.seasonal` |
-| PRE_WALL | `goals.proving` |
-| AT_WALL / BREAKTHROUGH | `goals.identity` |
-| Reset | `goals.whyThisSport` (always) |
+| Login | Email + password sign in |
+| Signup | Create account → leads to onboarding |
+| Onboarding | Voice interview → Claude extraction → profile saved to DO |
+| Home | Universal agent interface — connect, talk, end |
+| Settings | View/edit profile, goals, opponent intel, sign out |
+
+**Pages Function proxy:**
+All `/api/*` requests are proxied to the Worker via `frontend/functions/api/[[path]].ts`. This is required because Cloudflare Pages `_redirects` with status 200 does not proxy cross-origin — it returns `index.html`.
 
 ---
 
 ## Voice Architecture
 
 ```
-Athlete speaks → Push-to-talk button
-                        │
-                        ▼
-              ElevenLabs microphone capture
-                        │
-                        ▼
-              ElevenLabs speech-to-text
-                        │
-                        ▼
-              Worker LLM endpoint (full DO context)
-                        │
-                        ▼
-              Claude generates response text
-                        │
-                        ▼
-              ElevenLabs TTS (athlete's voice model ID)
-                        │
-                        ▼
-              Audio played in browser
+Athlete speaks
+      │
+      ▼
+ElevenLabs microphone capture (browser)
+      │
+      ▼
+ElevenLabs STT → conversation history
+      │
+      ▼
+POST /llm-endpoint (Worker custom LLM)
+      │
+      ▼
+Worker reads AthleteObject → builds system prompt → calls Claude (streaming)
+      │
+      ▼
+SSE stream → ElevenLabs TTS (fallback voice or athlete's cloned voice)
+      │
+      ▼
+Audio played in browser
 ```
 
-**Voice cloning:**
-1. Onboarding agent prompts 30-second natural speech recording
-2. Sample sent to ElevenLabs Voice Clone API → returns `voice_model_id`
-3. `voice_model_id` stored in `identity.voiceModelId` on Durable Object
-4. All subsequent TTS calls pass `voice_model_id`
-5. Fallback: warm preset voice if cloning fails; retry in background
+**Signed URL flow:**
+1. Frontend calls `GET /signed-url?athleteId=...`
+2. Worker reads athlete DO → determines if onboarded → builds personalized first message
+3. Worker fetches signed WebSocket URL from ElevenLabs API
+4. Returns `{ signedUrl, firstMessage, isOnboarded }`
+5. Frontend starts ElevenLabs session with `overrides: { agent: { firstMessage } }`
 
----
-
-## Cloudflare AI Gateway
-
-All Claude calls route through Cloudflare AI Gateway. Benefits:
-- **Caching**: Repeat prompts (same session state, similar context) return cached responses — critical for demo reliability
-- **Logging**: Full request/response log for every AI call — debugging and performance analysis
-- **Rate limit protection**: Gateway absorbs spikes, prevents API key exhaustion during demos
-- **Observability**: Dashboard shows latency, cache hit rate, token usage
+**Override permissions required in ElevenLabs agent Security tab:** `first_message`
 
 ---
 
 ## Audio Caching (R2)
 
-Generated audio clips are stored in Cloudflare R2. If the same message is triggered again (same session state, same context hash), the cached clip plays instead of re-generating. Repeat triggers cost nothing. Eliminates latency on common message patterns.
+Generated TTS audio is stored in Cloudflare R2 keyed by `tts/{voiceId}/{sha256(text)}`. If the same text is requested again for the same voice, the cached clip plays. Repeat triggers cost nothing and have zero generation latency.
 
 ---
 
-## Frontend Architecture
+## Security
 
-Cloudflare Pages hosting a Vite + React SPA. Optimized for phone use in gym environments:
-
-- Dark background throughout (low-light gym environments)
-- Large touch targets (one-thumb operation)
-- Waveform animation activates when agent is speaking
-- Current weight and weight remaining always visible during cut sessions
-- One screen does one thing — no dashboard clutter
-
-**Screens:**
-| Screen | Purpose |
-|---|---|
-| Onboarding | Multi-step voice interview, DO population |
-| Dashboard | Cut status, mode entry points |
-| Cut Session | 90s timer, waveform, weight display, push-to-talk |
-| Protocol | Ritual phase indicator, opponent name, push-to-talk |
-| Reset | Waveform + push-to-talk only — private space feel |
-| Settings | Weight update, competition date, opponent intel |
-
----
-
-## Security Considerations
-
-- All API keys stored as Cloudflare Workers secrets (never in `wrangler.toml`)
-- Durable Object IDs derived from authenticated user session — no enumeration possible
-- ElevenLabs Conversational AI sessions scoped per athlete — no cross-athlete data access
-- R2 audio files namespaced by `athleteId` — no direct URL guessing
-- AI Gateway provides an additional layer of rate limiting before Claude API
+- All API keys stored as Cloudflare Workers secrets (never in `wrangler.toml` or source)
+- Passwords hashed with PBKDF2, 100k iterations, SHA-256, unique 32-byte random salt per user
+- athleteId derived from email hash — not sequential, not guessable
+- ElevenLabs sessions scoped per athlete via signed URLs — no cross-athlete access
+- R2 audio files namespaced by athleteId + voice model
+- Auth tokens are random hex strings stored in AuthObject, not JWTs

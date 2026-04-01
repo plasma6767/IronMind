@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import type { Env, SessionContext, SessionState } from "./types";
+import type { Env, SessionContext, SessionState, AthleteData, ElevenLabsLLMRequest, ElevenLabsLLMResponse } from "./types";
 import { AthleteObject } from "./durable/AthleteObject";
-import { buildSystemPrompt, buildCutMessagePrompt } from "./prompts/index";
-import { callClaude } from "./lib/claude";
+import { AuthObject } from "./durable/AuthObject";
+import { buildSystemPrompt, buildCutMessagePrompt, buildConversationalSystemPrompt, buildOnboardingExtractionPrompt } from "./prompts/index";
+import { callClaude, callClaudeWithHistory, streamClaudeWithHistory } from "./lib/claude";
 import { cloneVoice, synthesizeSpeech } from "./lib/elevenlabs";
 
-// Re-export Durable Object class (required by Wrangler)
-export { AthleteObject };
+// Re-export Durable Object classes (required by Wrangler)
+export { AthleteObject, AuthObject };
 
 // Compute a hex SHA-256 digest using the Web Crypto API (available in Workers)
 async function sha256Hex(text: string): Promise<string> {
@@ -32,6 +33,57 @@ function getAthleteStub(env: Env, athleteId: string): DurableObjectStub {
   const id = env.ATHLETE_DO.idFromName(athleteId);
   return env.ATHLETE_DO.get(id);
 }
+
+function getAuthStub(env: Env, email: string): DurableObjectStub {
+  const id = env.AUTH_DO.idFromName(email.toLowerCase());
+  return env.AUTH_DO.get(id);
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+app.post("/auth/signup", async (c) => {
+  let body: { email?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (!body.email || !body.password) {
+    return c.json({ error: "email and password required" }, 400);
+  }
+
+  const stub = getAuthStub(c.env, body.email);
+  const res = await stub.fetch(new Request("https://do/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: body.email, password: body.password }),
+  }));
+  const data = await res.json();
+  return c.json(data, res.status as 200 | 409 | 400);
+});
+
+app.post("/auth/login", async (c) => {
+  let body: { email?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (!body.email || !body.password) {
+    return c.json({ error: "email and password required" }, 400);
+  }
+
+  const stub = getAuthStub(c.env, body.email);
+  const res = await stub.fetch(new Request("https://do/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: body.email, password: body.password }),
+  }));
+  const data = await res.json();
+  return c.json(data, res.status as 200 | 401 | 400);
+});
 
 // Read full athlete profile
 app.get("/athlete/:id", async (c) => {
@@ -101,11 +153,166 @@ app.post("/reset/message", async (c) => {
 });
 
 // ─── ElevenLabs Custom LLM Endpoint ──────────────────────────────────────────
+// ElevenLabs calls this on every conversation turn.
+// Reads athlete DO, builds context-aware system prompt, calls Claude, returns OpenAI format.
+//
+// ElevenLabs appends /chat/completions to whatever base URL you configure, so
+// both /llm-endpoint and /llm-endpoint/chat/completions are registered.
+// athleteId defaults to "athlete-001" when not provided as a query param.
 
-app.post("/llm-endpoint", async (c) => {
-  // TODO: Phase 6 — receive ElevenLabs request, read DO, call Claude, return response
-  // This is the critical endpoint: ElevenLabs → Worker → DO → Claude → ElevenLabs
-  return c.json({ error: "not implemented" }, 501);
+async function llmEndpointHandler(c: { req: { query: (k: string) => string | undefined; json: () => Promise<unknown> }; env: Env; json: (data: unknown, status?: number) => Response }) {
+  let body: ElevenLabsLLMRequest & { athleteId?: string };
+  try {
+    body = await c.req.json() as ElevenLabsLLMRequest & { athleteId?: string };
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  const athleteId = body.athleteId ?? c.req.query("athleteId") ?? "athlete-001";
+
+  if (!Array.isArray(body.messages)) {
+    return c.json({ error: "messages array required" }, 400);
+  }
+
+  // Claude only accepts "user" and "assistant" roles — filter out any "system"
+  // messages ElevenLabs may include in the history.
+  const claudeMessages = body.messages.filter(
+    (m) => m.role === "user" || m.role === "assistant"
+  );
+
+  const stub = getAthleteStub(c.env, athleteId);
+  const res = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await res.json<AthleteData | null>();
+
+  const isOnboarding = !athleteData?.identity?.name;
+  const systemPrompt = buildConversationalSystemPrompt(isOnboarding ? null : athleteData);
+
+  const requestBody = body as ElevenLabsLLMRequest & { stream?: boolean };
+
+  // ElevenLabs sends stream:true — return SSE so it can start TTS immediately.
+  // Fall back to plain JSON for non-streaming callers (e.g. curl tests).
+  if (requestBody.stream) {
+    if (claudeMessages.length === 0) {
+      // No messages to respond to — send a minimal SSE response
+      const encoder = new TextEncoder();
+      const id = `chatcmpl-${crypto.randomUUID()}`;
+      const stream = new ReadableStream({
+        start(controller) {
+          const chunk = { id, object: "chat.completion.chunk", model: c.env.CLAUDE_MODEL, choices: [{ index: 0, delta: { content: "Hey, I'm listening." }, finish_reason: null }] };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          const done = { id, object: "chat.completion.chunk", model: c.env.CLAUDE_MODEL, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(done)}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
+
+    const sseStream = streamClaudeWithHistory(c.env, systemPrompt, claudeMessages);
+    return new Response(sseStream, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
+  }
+
+  // Non-streaming path
+  let responseText: string;
+  try {
+    responseText = claudeMessages.length > 0
+      ? await callClaudeWithHistory(c.env, systemPrompt, claudeMessages)
+      : "Hey, I'm listening. Go ahead.";
+  } catch (err) {
+    console.error("Claude call failed:", err);
+    return c.json({ error: `Claude error: ${String(err)}` }, 500);
+  }
+
+  return c.json({
+    id: `chatcmpl-${crypto.randomUUID()}`,
+    object: "chat.completion",
+    model: c.env.CLAUDE_MODEL,
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: responseText },
+      finish_reason: "stop",
+    }],
+  } satisfies ElevenLabsLLMResponse);
+}
+
+app.post("/llm-endpoint", llmEndpointHandler);
+app.post("/llm-endpoint/chat/completions", llmEndpointHandler);
+
+// GET /signed-url?athleteId=xxx
+// Returns an ElevenLabs signed conversation URL and a personalized first message.
+// The first message is based on whether the athlete has a profile or not.
+app.get("/signed-url", async (c) => {
+  const athleteId = c.req.query("athleteId");
+  if (!athleteId) return c.json({ error: "athleteId required" }, 400);
+
+  // Read athlete profile to personalize the first message
+  const stub = getAthleteStub(c.env, athleteId);
+  const athleteRes = await stub.fetch(new Request("https://do/get"));
+  const athleteData = await athleteRes.json<AthleteData | null>();
+  const isOnboarded = !!athleteData?.identity?.name;
+
+  const firstMessage = isOnboarded
+    ? `Hey ${athleteData!.identity.name}, what's going on?`
+    : "Hey, I'm IronMind — tell me your name and what you're training for.";
+
+  const res = await fetch(
+    `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${c.env.ELEVENLABS_AGENT_ID}`,
+    { headers: { "xi-api-key": c.env.ELEVENLABS_API_KEY } }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    return c.json({ error: `ElevenLabs error: ${text}` }, 502);
+  }
+
+  const data = await res.json<{ signed_url: string }>();
+  return c.json({ signedUrl: data.signed_url, firstMessage, isOnboarded });
+});
+
+// POST /onboarding/complete
+// Called by the frontend after the onboarding conversation ends.
+// Runs a Claude extraction pass on the full transcript and saves the athlete profile to DO.
+app.post("/onboarding/complete", async (c) => {
+  let body: { athleteId: string; transcript: Array<{ role: string; content: string }> };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (!body.athleteId || !Array.isArray(body.transcript) || body.transcript.length === 0) {
+    return c.json({ error: "athleteId and transcript required" }, 400);
+  }
+
+  const transcriptText = body.transcript
+    .map((m) => `${m.role === "assistant" ? "Coach" : "Athlete"}: ${m.content}`)
+    .join("\n");
+
+  // Single Claude call to extract structured profile from the full conversation
+  const rawJson = await callClaude(
+    c.env,
+    buildOnboardingExtractionPrompt(body.athleteId),
+    transcriptText,
+    1500
+  );
+
+  let profileData: Partial<AthleteData>;
+  try {
+    profileData = JSON.parse(rawJson);
+  } catch {
+    return c.json({ error: "Failed to extract athlete profile from conversation — try again" }, 500);
+  }
+
+  const stub = getAthleteStub(c.env, body.athleteId);
+  await stub.fetch(new Request("https://do/set", {
+    method: "POST",
+    body: JSON.stringify(profileData),
+  }));
+
+  return c.json({ ok: true });
 });
 
 // ─── Voice / TTS ──────────────────────────────────────────────────────────────

@@ -4,145 +4,155 @@ Build in this sequence. Each phase ends with something testable.
 
 ---
 
-## Phase 1 — Foundation (Durable Object + Worker Skeleton)
+## Phase 1 — Foundation ✅ COMPLETE
 
 **Goal:** Can read and write athlete data. All routes exist, nothing crashes.
 
-- [ ] Run `wrangler init` inside `/worker`, configure `wrangler.toml` bindings (DO, R2, AI Gateway)
-- [ ] Define all TypeScript interfaces in `worker/src/types.ts` (full schema: identity, goals, currentCut, wrestlingProfile, sessions, mentalPatterns, mindsetTraining, identityAnchors, upcomingOpponent)
-- [ ] Implement `AthleteObject` Durable Object in `worker/src/durable/AthleteObject.ts`
-  - `get(field)` / `set(field, value)` / `getAll()` methods
-  - Typed accessors for each schema section
-- [ ] Wire Worker entry point (`worker/src/index.ts`) — route all requests to stub handlers returning `501`
-- [ ] **Smoke test:** create an athlete, write every DO field, read it all back, verify shape
+- [x] Configure `wrangler.toml` bindings (DO, R2)
+- [x] Define all TypeScript interfaces in `worker/src/types.ts` (full schema: identity, goals, currentCut, wrestlingProfile, sessions, mentalPatterns, mindsetTraining, identityAnchors, upcomingOpponent)
+- [x] Implement `AthleteObject` Durable Object — get/set/getAll over SQLite storage
+- [x] Wire Worker entry point (`worker/src/index.ts`) with Hono routing
+- [x] Smoke test: seed full athlete object, read back, verify shape
 
 ---
 
-## Phase 2 — AI Brain (Claude via AI Gateway)
+## Phase 2 — AI Brain ✅ COMPLETE
 
 **Goal:** Worker reads athlete context, builds a prompt, gets a real Claude response back.
 
-- [ ] Create AI Gateway in Cloudflare dashboard — copy gateway URL into Worker secrets
-- [ ] Build prompt assembly in `worker/src/prompts/index.ts`
-  - System prompt template (all dynamic fields from DO)
-  - Cut companion message prompt
-  - Goal layer selection logic (session state → goal field)
-- [ ] Implement `POST /generate` route — reads DO → assembles prompt → calls Claude via AI Gateway → returns text
-- [ ] **Smoke test:** hit `/generate` with a seeded athlete Durable Object, verify Claude response references athlete-specific data (name, weight, goals)
+- [x] Build `worker/src/lib/claude.ts` — `callClaude()`, `callClaudeWithHistory()`, `streamClaudeWithHistory()`
+- [x] Build prompt assembly in `worker/src/prompts/index.ts`
+- [x] Implement `POST /generate` route — reads DO → assembles prompt → calls Claude → returns text
+- [x] Smoke test: hit `/generate` with seeded athlete, verify Claude response references athlete-specific data
 
 ---
 
-## Phase 3 — Voice Layer (ElevenLabs Clone + TTS)
+## Phase 3 — Voice Layer ✅ COMPLETE
 
-**Goal:** Athlete records a sample. The agent speaks back in their own voice.
+**Goal:** Athlete can record a sample. The agent speaks back in their own voice.
 
-- [ ] Implement `POST /onboarding/voice-clone` — accept audio blob → call ElevenLabs Voice Clone API → store `voice_model_id` in DO under `identity.voiceModelId`
-- [ ] Implement fallback: if clone fails, store preset voice ID, retry clone in background
-- [ ] Implement `POST /tts` — accept `{ text, athleteId }` → read `voice_model_id` from DO → call ElevenLabs TTS → return audio stream
-- [ ] Wire R2 audio cache — hash prompt text → R2 key, check before generating, write after
-- [ ] **Smoke test:** record 30s sample, verify ElevenLabs voice model created, play first cloned audio message
+- [x] Implement `POST /voice-clone` — accept audio blob → call ElevenLabs Voice Clone API → store `voiceModelId` in DO
+- [x] Implement `POST /tts` — accept `{ text, athleteId }` → read voice model from DO → call ElevenLabs TTS → return audio
+- [x] Wire R2 audio cache — SHA-256 hash of text → R2 key, check before generating, write after
+- [x] Smoke test: verify voice model created, play first cloned audio
 
 ---
 
-## Phase 4 — Cut Companion (Core Product)
+## Phase 4 — ElevenLabs Conversational AI + Universal Agent ✅ COMPLETE
 
-**Goal:** Full cut session end-to-end. 90-second loop, state machine, push-to-talk response.
+**Goal:** Real-time voice conversation with full athlete context on every turn. One interface, agent figures out mode from context.
 
-- [ ] Implement session state machine in `worker/src/routes/session.ts`
-  - State transitions: `EARLY → BUILDING → PRE_WALL → AT_WALL → BREAKTHROUGH`
-  - PRE_WALL detection: `sessionMinute >= (avgQuitMinute - 2)`
+- [x] Implement `POST /llm-endpoint` and `POST /llm-endpoint/chat/completions` (ElevenLabs appends `/chat/completions`)
+  - Reads athleteId from request body (`customLlmExtraBody`)
+  - Reads full Durable Object, builds context-aware universal system prompt
+  - Filters system-role messages (ElevenLabs sends them, Claude rejects them)
+  - Returns SSE streaming response when `stream: true` (required by ElevenLabs)
+  - Falls back to plain JSON for non-streaming callers
+- [x] Implement `GET /signed-url` — returns ElevenLabs signed WebSocket URL + personalized first message
+- [x] Implement `POST /onboarding/complete` — Claude extraction pass on full transcript → save structured profile to DO
+- [x] Build universal system prompt (`buildConversationalSystemPrompt`) — single agent handles cut, pre-match, reset, check-in based on conversation context
+- [x] Build onboarding extraction prompt (`buildOnboardingExtractionPrompt`) — converts natural speech transcript to typed DO fields
+- [x] Build `Home.tsx` — single connect/end interface, waveform, elapsed timer, athlete name + cut info
+- [x] Build `Onboarding.tsx` — voice interview, "I'm ready" after 8+ turns, saves profile, routes to home
+- [x] Build `functions/api/[[path]].ts` — Cloudflare Pages Function proxying `/api/*` to Worker
+- [x] Configure ElevenLabs agent: custom LLM URL, `first_message` override enabled in Security tab
+- [x] Smoke test: full onboarding conversation → profile saves to DO → returning session greets by name
+
+---
+
+## Phase 5 — Auth System ✅ COMPLETE
+
+**Goal:** Email + password account system. Every athlete's data is linked to their account.
+
+- [x] Implement `worker/src/lib/auth.ts` — PBKDF2 password hashing (Web Crypto API, 100k iterations, SHA-256), token generation
+- [x] Implement `worker/src/durable/AuthObject.ts`
+  - `POST /signup` — hashes password, derives athleteId from SHA-256(email), stores credentials
+  - `POST /login` — verifies password, issues session token
+  - Returns 409 on duplicate email, 401 on bad credentials
+- [x] Wire `POST /auth/signup` and `POST /auth/login` routes in Worker
+- [x] Add `AUTH_DO` binding and v2 migration to `wrangler.toml`
+- [x] Build `Login.tsx` — email + password, error messages, "Create an account" link
+- [x] Build `Signup.tsx` — email + password + confirm, leads into onboarding
+- [x] Update `App.tsx` — state machine: `loading → auth → onboarding → home`
+  - Checks localStorage for token + athleteId on mount
+  - `onAuth()` fetches profile to determine routing
+- [x] Smoke test: signup → onboarding → profile saves → login → home (no re-onboarding)
+
+---
+
+## Phase 6 — UI Polish + Engagement Features
+
+**Goal:** The app feels intentional, not minimal. Small features that add real value.
+
+### Visual Polish
+- [ ] Live transcript — captions that appear while the agent is speaking, fade after a few seconds
+- [ ] Dynamic waveform — reacts to actual audio volume in real time (louder = bigger/faster)
+- [ ] Pulse animation on Connect button while it's in listening state
+- [ ] Post-session summary card — slides up after ending a session (duration, key themes, mindset score delta)
+- [ ] Smooth screen transitions
+
+### Home Screen Additions
+- [ ] Weight check-in — quick `+/- 0.5lb` buttons to log today's weight before connecting
+- [ ] Days until competition countdown (derived from `currentCut.competitionDate`)
+- [ ] Session streak display — "7 days in a row" (derived from `mentalPatterns.currentStreak`)
+- [ ] Mood tap before session — three states (struggling / neutral / locked in), influences agent opening
+
+### Quality of Life
+- [ ] Reconnect button when session drops unexpectedly (instead of just resetting to Start)
+- [ ] End session confirmation — "End session?" with Yes/Cancel to prevent accidental hangups
+- [ ] Error state shows actionable message, not just "try again"
+
+---
+
+## Phase 7 — Settings Screen
+
+**Goal:** Athlete can view and edit their profile without re-doing full onboarding.
+
+- [ ] Display saved profile: name, weight class, natural weight, wrestling style, archetype
+- [ ] Display current goals (immediate, seasonal, proving, identity, why)
+- [ ] Edit upcoming opponent — name, school, record, tendencies, psychological notes
+- [ ] Edit current cut — target weight, competition date, current weight
+- [ ] Option to redo full onboarding (clear profile + restart)
+- [ ] Sign out button — clears localStorage, returns to login
+
+---
+
+## Phase 8 — Cut Companion (Core Proactive Mode)
+
+**Goal:** Agent proactively checks in during a weight cut on a timed loop without the athlete initiating.
+
+- [ ] Implement session state machine — `EARLY → BUILDING → PRE_WALL → AT_WALL → BREAKTHROUGH`
+  - `PRE_WALL` detection: fires 2 minutes before `avgQuitMinute`
   - State-to-goal-layer mapping
-- [ ] Implement Durable Object alarm for 90-second message loop
-  - On alarm: calculate state → assemble prompt → call Claude → cache + play audio → reschedule
-- [ ] Add push-to-talk handling: athlete input interrupts the loop, agent replies directly, session continues
+- [ ] Implement Durable Object alarm for periodic message delivery
 - [ ] Update DO `sessions[]` and `mentalPatterns` at end of session
-- [ ] Build `CutSession` screen — session timer, waveform, current weight display
-- [ ] Build `PushToTalk` component — hold to speak, release to send, active listening animation
-- [ ] Wire frontend ↔ `/session/start`, `/session/end` Worker routes
-- [ ] **Smoke test:** run a full session through all state transitions, verify messages match state, verify push-to-talk response is contextual
+- [ ] Smoke test: run through all state transitions, verify messages match state
 
 ---
 
-## Phase 5 — Mindset Challenges
+## Phase 9 — Mindset Challenges
 
-**Goal:** Three challenge types fire at correct states, evaluate athlete response, update scores.
+**Goal:** Three challenge types fire at correct session states, evaluate athlete response, update scores.
 
-- [ ] Implement challenge selection logic — `weakestDimension` from DO drives which type fires
-- [ ] Implement Pressure Test prompt + evaluation in `worker/src/routes/challenge.ts`
-  - Scenario built from `wrestlingProfile.mentalTriggers`
-  - Evaluate: specific + process-oriented (strong) vs. vague + outcome-focused (needs coaching)
-- [ ] Implement Identity Challenge prompt + evaluation
-  - Voice a specific doubt from current cut data
-  - Evaluate: earned + specific vs. hollow positivity
-- [ ] Implement Visualization Lock prompt + evaluation
-  - Build scenario from `upcomingOpponent` intel
-  - 3 specificity test questions — push back if answers are vague
+- [ ] Challenge selection logic — `weakestDimension` from DO drives type
+- [ ] Pressure Test — scenario from `wrestlingProfile.mentalTriggers`, evaluate specificity
+- [ ] Identity Challenge — voice a specific doubt, evaluate earned vs. hollow response
+- [ ] Visualization Lock — built from `upcomingOpponent`, 3 specificity test questions
 - [ ] Wire evaluation → score (1–10) → DO update (`challengeScores`, `mindsetTraining.scores`)
-- [ ] Update `mindsetTraining.weakestDimension` and `strongestDimension` after scoring
-- [ ] **Smoke test:** fire each challenge type against a seeded athlete, verify pushback logic on a vague answer, verify DO scores updated correctly
+- [ ] Update `weakestDimension` / `strongestDimension` after scoring
+- [ ] Smoke test: fire each type, verify pushback on vague answer, verify DO scores updated
 
 ---
 
-## Phase 6 — Protocol + Reset + Custom LLM Endpoint
+## Phase 10 — Pre-Match Protocol + Reset
 
-**Goal:** All four pillars working. ElevenLabs Conversational AI wired to the Worker.
+**Goal:** Dedicated structured modes for match prep and post-loss recovery.
 
-- [ ] Implement Pre-Match Protocol in `worker/src/routes/protocol.ts`
-  - Phase sequence: `breathing → visualization → identity_reinforcement → ignition`
-  - Visualization built from `upcomingOpponent` intel — specific HOW, not just "you win"
+- [ ] Pre-Match Protocol — `breathing → visualization → identity_reinforcement → ignition`
+  - Visualization built from `upcomingOpponent` intel
   - Ignition: 20 words max
-  - Push-to-talk interrupt: address athlete input completely, then continue phase
-- [ ] Implement Reset Conversation in `worker/src/routes/reset.ts`
-  - Emotional arc state machine: `acknowledge → anchor → ground`
-  - Do not advance arc until current phase is complete
+- [ ] Reset Conversation — emotional arc: `acknowledge → anchor → ground`
   - Always pull from `goals.whyThisSport` in anchor/ground phases
-  - No length limit, no timer
-- [ ] Implement `POST /llm-endpoint` in `worker/src/routes/llm-endpoint.ts`
-  - Accept ElevenLabs Conversational AI request format (`{ messages, conversation_history }`)
-  - Extract `athlete_id` from session context
-  - Read full DO → assemble context prompt → call Claude → return in ElevenLabs expected JSON format
-- [ ] Configure ElevenLabs Conversational AI agent to point at `https://<worker-url>/llm-endpoint`
-- [ ] **Smoke test Protocol:** verify all 4 phases play, test push-to-talk interruption mid-phase
-- [ ] **Smoke test Reset:** verify emotional arc, verify `whyThisSport` is referenced, verify no rushing to positivity
-- [ ] **Smoke test LLM endpoint:** ElevenLabs calls Worker, Worker calls Claude with full DO context, response plays in cloned voice
-
----
-
-## Phase 7 — Conversational Onboarding
-
-**Goal:** Voice interview populates the Durable Object. First experience feels like meeting a coach.
-
-- [ ] Implement onboarding system prompt in `worker/src/routes/onboarding.ts`
-  - Separate onboarding-mode prompt (not production mode prompt)
-  - Conversational tone — questions, not form fields
-- [ ] Implement 6-step onboarding sequence with DO writes after each section
-  - Step 1: Basic profile → `identity` fields
-  - Step 2: Goals intake → `goals` object
-  - Step 3: Mental profile → `wrestlingProfile` + `mentalArchetype`
-  - Step 4: Identity anchors → `identityAnchors[]` (5+ specific career moments)
-  - Step 5: Voice clone recording → `voiceModelId`
-  - Step 6: Current cut → `currentCut` object
-- [ ] Implement mental archetype determination (3 archetype questions → `competitor | craftsman | warrior`)
-- [ ] Implement structured data extraction: parse natural speech → typed DO fields
-- [ ] Build `Onboarding` screen — waveform, push-to-talk, step progress indicator
-- [ ] **Smoke test:** complete full onboarding flow, verify all DO fields populated correctly
-
----
-
-## Phase 8 — Frontend Polish + Deploy
-
-**Goal:** Looks intentional on a phone screen. Deployed to production. Tested on device.
-
-- [ ] Consistent dark theme across all screens — `#0a0a0a` background, high-contrast text
-- [ ] Waveform animation activates when agent is speaking (Web Audio API or CSS animation driven by audio state)
-- [ ] Microphone icon clearly shows active listening state during push-to-talk
-- [ ] Weight and weight remaining always visible during cut sessions
-- [ ] All touch targets large enough for one-thumb gym use (min 48px)
-- [ ] `Dashboard` screen — weight remaining, days to competition, mode entry buttons
-- [ ] `Protocol` screen — ritual phase indicator, opponent name visible
-- [ ] `Reset` screen — waveform + push-to-talk only, nothing else
-- [ ] `Settings` screen — weight update, competition date, opponent intel entry
-- [ ] Deploy Worker: `pnpm --filter worker deploy`
-- [ ] Deploy frontend: `pnpm --filter frontend deploy` (Cloudflare Pages)
-- [ ] Verify AI Gateway dashboard shows live logs and cache hits
-- [ ] Full end-to-end test on a real mobile device
+  - No advancing arc until current phase is complete
+- [ ] Smoke test Protocol: all 4 phases, test interruption mid-phase
+- [ ] Smoke test Reset: verify arc, verify `whyThisSport` referenced, no rushing to positivity

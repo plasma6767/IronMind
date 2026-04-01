@@ -8,9 +8,17 @@ compatibility_flags = ["nodejs_compat"]
 name = "ATHLETE_DO"
 class_name = "AthleteObject"
 
+[[durable_objects.bindings]]
+name = "AUTH_DO"
+class_name = "AuthObject"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AthleteObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AuthObject"]
 
 # ─── R2 Buckets ───────────────────────────────────────────────────────────────
 [[r2_buckets]]
@@ -30,6 +38,7 @@ ELEVENLABS_TTS_MODEL = "eleven_turbo_v2"
 # CF_AI_GATEWAY_URL
 # ELEVENLABS_API_KEY
 # ELEVENLABS_FALLBACK_VOICE_ID
+# ELEVENLABS_AGENT_ID
 
 # ─── Production Environment ───────────────────────────────────────────────────
 [env.production]

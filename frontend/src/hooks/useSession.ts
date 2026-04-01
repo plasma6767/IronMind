@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import type { SessionState } from "../../../worker/src/types";
+
+type SessionState = "EARLY" | "BUILDING" | "PRE_WALL" | "AT_WALL" | "BREAKTHROUGH";
 
 interface SessionHookState {
   sessionMinute: number;
