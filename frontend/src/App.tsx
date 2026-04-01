@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Landing from "./screens/Landing";
 import Login from "./screens/Login";
 import Signup from "./screens/Signup";
 import Onboarding from "./screens/Onboarding";
@@ -38,8 +39,6 @@ export default function App() {
       });
   }, []);
 
-  // Called by Login and Signup after credentials are verified.
-  // Sets appState — route guards on /login and /signup redirect on next render.
   async function onAuth(athleteId: string) {
     try {
       const res = await fetch(`/api/athlete/${encodeURIComponent(athleteId)}`);
@@ -56,7 +55,6 @@ export default function App() {
 
   if (appState.phase === "loading") return null;
 
-  // Route guard helpers — derived once so JSX stays readable
   const isAuth = appState.phase === "auth";
   const isOnboarding = appState.phase === "onboarding";
   const isHome = appState.phase === "home";
@@ -64,17 +62,17 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Root — redirect based on current phase */}
+        {/* Root — landing page for new visitors, home redirect for logged-in users */}
         <Route
           path="/"
           element={
-            isAuth        ? <Navigate to="/login"      replace /> :
-            isOnboarding  ? <Navigate to="/onboarding" replace /> :
-                            <Navigate to="/home"       replace />
+            isHome       ? <Navigate to="/home"       replace /> :
+            isOnboarding ? <Navigate to="/onboarding" replace /> :
+            <Landing />
           }
         />
 
-        {/* Auth screens — redirect away if already authenticated */}
+        {/* Auth screens */}
         <Route
           path="/login"
           element={
@@ -92,7 +90,7 @@ export default function App() {
           }
         />
 
-        {/* Onboarding — redirect to home if profile already exists */}
+        {/* Onboarding */}
         <Route
           path="/onboarding"
           element={
@@ -108,7 +106,7 @@ export default function App() {
           }
         />
 
-        {/* Home — redirect to root if not authenticated or not onboarded */}
+        {/* Home */}
         <Route
           path="/home"
           element={
@@ -118,6 +116,7 @@ export default function App() {
           }
         />
 
+        {/* Settings */}
         <Route
           path="/settings"
           element={
@@ -130,7 +129,6 @@ export default function App() {
                   setAppState({ phase: "auth" });
                 }}
                 onRedoOnboarding={() => {
-                  // Profile reset already called by Settings; just update routing state.
                   setAppState({
                     phase: "onboarding",
                     athleteId: (appState as { phase: "home"; athleteId: string }).athleteId,
@@ -140,6 +138,7 @@ export default function App() {
             ) : <Navigate to="/" replace />
           }
         />
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

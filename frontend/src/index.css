@@ -5,15 +5,59 @@
 @layer base {
   html, body, #root {
     height: 100%;
-    background-color: #0a0a0a;
-    color: #f5f5f5;
-    font-family: "Inter", system-ui, sans-serif;
+    background-color: #000000;
+    color: #f0f4ff;
+    font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Prevent rubber-band scroll on iOS during sessions */
   body {
     overscroll-behavior: none;
+  }
+
+  /* Smooth scrolling */
+  * {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer utilities {
+  /* Subtle grid background for landing page */
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(37,99,235,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37,99,235,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Blue shimmer text */
+  .text-shimmer {
+    background: linear-gradient(
+      90deg,
+      #CBD5E1 0%,
+      #fff 40%,
+      #60A5FA 60%,
+      #CBD5E1 100%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 3s linear infinite;
+  }
+
+  /* Glass card */
+  .glass {
+    background: rgba(8, 12, 24, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(26, 39, 68, 0.8);
+  }
+
+  /* Blue glow border */
+  .border-blue-glow {
+    border-color: #2563EB;
+    box-shadow: 0 0 0 1px rgba(37,99,235,0.3), 0 0 16px rgba(37,99,235,0.2);
   }
 }

@@ -1,4 +1,4 @@
-import type { AthleteData, Session, MentalPatterns, MindsetTraining, MindsetScores } from "../types";
+import type { AthleteData, Session, MentalPatterns, MindsetTraining, MindsetScores, ConversationMode } from "../types";
 import { mergeProfileLearning, type ProfileLearningUpdates } from "../lib/profileLearning";
 
 const DEFAULT_MENTAL_PATTERNS: MentalPatterns = {
@@ -62,6 +62,10 @@ export class AthleteObject implements DurableObject {
         return this.handleReset();
       case "/profile-learn":
         return this.handleProfileLearn(request);
+      case "/set-session-mode":
+        return this.handleSetSessionMode(request);
+      case "/get-with-mode":
+        return this.handleGetWithMode();
       default:
         return new Response("Not found", { status: 404 });
     }
@@ -217,6 +221,25 @@ export class AthleteObject implements DurableObject {
     if (!data) return;
     const merged = mergeProfileLearning(data, updates);
     await this.state.storage.put("athlete", merged);
+  }
+
+  // ─── Session Mode ─────────────────────────────────────────────────────────
+  // Stores the active conversation mode (workout / prematch / postmatch / general)
+  // in its own storage key, separate from the athlete profile, so ephemeral
+  // session state never pollutes the persistent AthleteData record.
+
+  private async handleSetSessionMode(request: Request): Promise<Response> {
+    const { mode } = await request.json<{ mode: ConversationMode }>();
+    await this.state.storage.put("sessionMode", mode);
+    return Response.json({ ok: true });
+  }
+
+  private async handleGetWithMode(): Promise<Response> {
+    const [athlete, sessionMode] = await Promise.all([
+      this.state.storage.get<AthleteData>("athlete"),
+      this.state.storage.get<ConversationMode>("sessionMode"),
+    ]);
+    return Response.json({ athlete: athlete ?? null, sessionMode: sessionMode ?? null });
   }
 
   // ─── Derived Patterns ─────────────────────────────────────────────────────

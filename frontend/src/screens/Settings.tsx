@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { IronMindMascot } from "../components/Mascot";
 
-// Local types — mirrors worker/src/types.ts but without Cloudflare-specific bindings
 interface AthleteData {
   identity: {
     name: string;
@@ -43,8 +43,6 @@ interface AthleteData {
   };
 }
 
-// ─── Display helpers ──────────────────────────────────────────────────────────
-
 const DIMENSION_LABELS: Record<string, string> = {
   pressureTolerance:   "Pressure Tolerance",
   focusControl:        "Focus Control",
@@ -73,15 +71,46 @@ const GOAL_LABELS: Array<{ key: keyof NonNullable<AthleteData["goals"]>; label: 
   { key: "whyThisSport", label: "Why this sport" },
 ];
 
-// ─── Props ────────────────────────────────────────────────────────────────────
-
 interface SettingsProps {
   athleteId: string;
   onSignOut: () => void;
   onRedoOnboarding: () => void;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── Section header ───────────────────────────────────────────────────────────
+
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 mb-4">
+      <div className="w-1 h-4 rounded-full" style={{ background: "linear-gradient(180deg, #2563EB, #60A5FA)" }} />
+      <p className="text-silver-light text-xs font-bold uppercase tracking-widest">{label}</p>
+    </div>
+  );
+}
+
+// ─── Profile row ──────────────────────────────────────────────────────────────
+
+function ProfileRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-silver text-sm">{label}</span>
+      <span className="text-primary text-sm font-semibold">{value}</span>
+    </div>
+  );
+}
+
+// ─── Input field ──────────────────────────────────────────────────────────────
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-muted text-xs mb-1.5 uppercase tracking-wide">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: SettingsProps) {
   const navigate = useNavigate();
@@ -91,21 +120,20 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Redo-onboarding confirmation state — requires two deliberate taps
   const [isConfirmingReset, setIsConfirmingReset] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
-  // ── Cut fields ───────────────────────────────────────────────────────────────
   const [currentWeight, setCurrentWeight] = useState("");
   const [targetWeight, setTargetWeight] = useState("");
   const [competitionDate, setCompetitionDate] = useState("");
 
-  // ── Opponent fields ──────────────────────────────────────────────────────────
   const [opponentName, setOpponentName] = useState("");
   const [opponentSchool, setOpponentSchool] = useState("");
   const [opponentRecord, setOpponentRecord] = useState("");
   const [opponentTendencies, setOpponentTendencies] = useState("");
   const [opponentPsychNotes, setOpponentPsychNotes] = useState("");
+
+  const inputClass = "w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-blue transition-colors placeholder:text-muted";
 
   // ── Load ─────────────────────────────────────────────────────────────────────
 
@@ -115,15 +143,12 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
       .then((data) => {
         if (!data) return;
         setAthleteData(data);
-
         const cut = data.currentCut;
         if (cut) {
           setCurrentWeight(String(cut.currentWeight ?? ""));
           setTargetWeight(String(cut.targetWeight ?? ""));
-          // Format ISO date to yyyy-mm-dd for <input type="date">
           setCompetitionDate(cut.competitionDate ? cut.competitionDate.slice(0, 10) : "");
         }
-
         const opp = data.upcomingOpponent;
         if (opp) {
           setOpponentName(opp.name ?? "");
@@ -147,7 +172,6 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
     const cw = parseFloat(currentWeight);
     const tw = parseFloat(targetWeight);
 
-    // Build the full currentCut object — shallow merge in DO would otherwise drop fields
     const updatedCut: AthleteData["currentCut"] = athleteData.currentCut
       ? {
           ...athleteData.currentCut,
@@ -168,7 +192,6 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
           }
         : null;
 
-    // Build full opponent object so no fields are silently dropped
     const updatedOpponent: AthleteData["upcomingOpponent"] = opponentName.trim()
       ? {
           name: opponentName.trim(),
@@ -188,7 +211,6 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
       });
       if (!res.ok) throw new Error("Save failed");
 
-      // Refresh local state so mindset scores and derived values stay in sync
       const refreshed = await fetch(`/api/athlete/${encodeURIComponent(athleteId)}`);
       const updated = (await refreshed.json()) as AthleteData | null;
       if (updated) setAthleteData(updated);
@@ -208,45 +230,50 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
     setIsResetting(true);
     try {
       await fetch(`/api/athlete/${encodeURIComponent(athleteId)}/reset`, { method: "POST" });
-      onRedoOnboarding(); // App routing state update — navigates to /onboarding
+      onRedoOnboarding();
     } catch {
       setIsResetting(false);
       setIsConfirmingReset(false);
     }
   }
 
-  // ── Derived display values ───────────────────────────────────────────────────
-
   const scores = athleteData?.mindsetTraining?.scores;
   const weakest = athleteData?.mindsetTraining?.weakestDimension;
   const strongest = athleteData?.mindsetTraining?.strongestDimension;
   const challengesDone = athleteData?.mindsetTraining?.challengeHistory?.length ?? 0;
 
-  // ─── Render ──────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full bg-background overflow-y-auto">
+
       {/* Header */}
       <div className="flex items-center gap-4 px-6 pt-10 pb-6 border-b border-border">
         <button
-          className="text-muted text-sm min-h-touch flex items-center"
+          className="flex items-center gap-1.5 text-silver text-sm min-h-touch"
           onClick={() => navigate(-1)}
         >
-          ← Back
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Back
         </button>
-        <h1 className="text-primary font-semibold text-lg">Settings</h1>
+        <IronMindMascot width={32} minimal />
+        <h1 className="text-primary font-black text-lg">Settings</h1>
       </div>
 
       <div className="flex flex-col gap-8 px-6 py-8 pb-16">
 
         {/* ── Profile ─────────────────────────────────────────────────────────── */}
         <section>
-          <p className="text-muted text-xs uppercase tracking-widest mb-4">Profile</p>
+          <SectionHeader label="Profile" />
           {athleteData ? (
-            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-3">
+            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-2 shadow-card">
               <ProfileRow label="Name" value={athleteData.identity.name} />
+              <div className="h-px bg-border" />
               <ProfileRow label="Weight class" value={`${athleteData.identity.weightClass} lbs`} />
               <ProfileRow label="Natural weight" value={`${athleteData.identity.naturalWeight} lbs`} />
+              <div className="h-px bg-border" />
               <ProfileRow
                 label="Style"
                 value={STYLE_LABELS[athleteData.identity.style] ?? athleteData.identity.style}
@@ -259,27 +286,27 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
               )}
             </div>
           ) : (
-            <p className="text-muted text-sm">Loading...</p>
+            <p className="text-silver text-sm">Loading...</p>
           )}
         </section>
 
         {/* ── Goals ───────────────────────────────────────────────────────────── */}
         {athleteData?.goals && (
           <section>
-            <p className="text-muted text-xs uppercase tracking-widest mb-4">Goals</p>
-            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4">
+            <SectionHeader label="Goals" />
+            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4 shadow-card">
               {GOAL_LABELS.map(({ key, label }) => {
                 const value = athleteData.goals![key];
                 if (!value) return null;
                 return (
                   <div key={key}>
-                    <p className="text-muted text-xs mb-1">{label}</p>
+                    <p className="text-muted text-xs mb-1 uppercase tracking-wide">{label}</p>
                     <p className="text-primary text-sm leading-relaxed">{value}</p>
                   </div>
                 );
               })}
-              <p className="text-muted text-xs mt-1">
-                Goals are set during onboarding. Use "Redo Onboarding" below to update them.
+              <p className="text-muted text-xs mt-1 pt-2 border-t border-border">
+                Goals update automatically as IronMind learns from your sessions.
               </p>
             </div>
           </section>
@@ -287,175 +314,146 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
 
         {/* ── Mindset Profile ─────────────────────────────────────────────────── */}
         <section>
-          <p className="text-muted text-xs uppercase tracking-widest mb-4">Mindset Profile</p>
-
+          <SectionHeader label="Mindset Profile" />
           {scores ? (
-            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4">
+            <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4 shadow-card">
               {Object.entries(scores).map(([key, value]) => {
                 const isWeak = key === weakest;
                 const isBest = key === strongest;
                 return (
                   <div key={key}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className={`text-sm font-medium ${isWeak ? "text-primary" : "text-muted"}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-sm font-semibold ${isWeak ? "text-primary" : "text-silver"}`}>
                         {DIMENSION_LABELS[key] ?? key}
                       </span>
                       <div className="flex items-center gap-2">
                         {isWeak && (
-                          <span className="text-xs text-muted border border-border rounded-full px-2 py-0.5">
+                          <span className="text-xs text-blue-light border border-blue-deeper rounded-full px-2 py-0.5">
                             focus area
                           </span>
                         )}
                         {isBest && !isWeak && (
-                          <span className="text-xs text-muted border border-border rounded-full px-2 py-0.5">
+                          <span className="text-xs text-silver border border-border rounded-full px-2 py-0.5">
                             strongest
                           </span>
                         )}
-                        <span className="text-primary font-mono text-sm tabular-nums">
+                        <span className="text-primary font-mono text-sm tabular-nums font-bold">
                           {value.toFixed(1)}
                         </span>
                       </div>
                     </div>
                     <div className="h-1.5 bg-border rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-primary rounded-full transition-all duration-500"
-                        style={{ width: `${(value / 10) * 100}%` }}
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${(value / 10) * 100}%`,
+                          background: isWeak
+                            ? "linear-gradient(90deg, #1D4ED8, #60A5FA)"
+                            : "linear-gradient(90deg, #1a2744, #2563EB)",
+                        }}
                       />
                     </div>
                   </div>
                 );
               })}
-
-              <p className="text-muted text-xs mt-1">
+              <p className="text-muted text-xs mt-1 pt-2 border-t border-border">
                 {challengesDone === 0
-                  ? "Scores update as you complete mindset challenges during sessions."
+                  ? "Scores update as IronMind observes your mental patterns across sessions."
                   : `Updated across ${challengesDone} challenge${challengesDone !== 1 ? "s" : ""}.`}
               </p>
             </div>
           ) : (
-            <p className="text-muted text-sm">Loading...</p>
+            <p className="text-silver text-sm">Loading...</p>
           )}
         </section>
 
         {/* ── Current Cut ─────────────────────────────────────────────────────── */}
         <section>
-          <p className="text-muted text-xs uppercase tracking-widest mb-4">Current Cut</p>
+          <SectionHeader label="Current Cut" />
           <div className="flex flex-col gap-3">
-            <div>
-              <label className="block text-muted text-xs mb-1.5">Current weight (lbs)</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                placeholder="e.g. 171.4"
-                value={currentWeight}
-                onChange={(e) => setCurrentWeight(e.target.value)}
-                className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <label className="block text-muted text-xs mb-1.5">Target weight (lbs)</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                placeholder="e.g. 165.0"
-                value={targetWeight}
-                onChange={(e) => setTargetWeight(e.target.value)}
-                className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <label className="block text-muted text-xs mb-1.5">Competition date</label>
-              <input
-                type="date"
-                value={competitionDate}
+            <Field label="Current weight (lbs)">
+              <input type="number" inputMode="decimal" step="0.1" placeholder="e.g. 171.4"
+                value={currentWeight} onChange={(e) => setCurrentWeight(e.target.value)}
+                className={inputClass} />
+            </Field>
+            <Field label="Target weight (lbs)">
+              <input type="number" inputMode="decimal" step="0.1" placeholder="e.g. 165.0"
+                value={targetWeight} onChange={(e) => setTargetWeight(e.target.value)}
+                className={inputClass} />
+            </Field>
+            <Field label="Competition date">
+              <input type="date" value={competitionDate}
                 onChange={(e) => setCompetitionDate(e.target.value)}
-                className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary"
-              />
-            </div>
+                className={inputClass} />
+            </Field>
           </div>
         </section>
 
         {/* ── Upcoming Opponent ────────────────────────────────────────────────── */}
         <section>
-          <p className="text-muted text-xs uppercase tracking-widest mb-4">Upcoming Opponent</p>
+          <SectionHeader label="Upcoming Opponent" />
           <div className="flex flex-col gap-3">
-            <input
-              type="text"
-              placeholder="Name"
-              value={opponentName}
-              onChange={(e) => setOpponentName(e.target.value)}
-              className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary placeholder:text-muted"
-            />
+            <input type="text" placeholder="Name" value={opponentName}
+              onChange={(e) => setOpponentName(e.target.value)} className={inputClass} />
             <div className="flex gap-3">
-              <input
-                type="text"
-                placeholder="School"
-                value={opponentSchool}
-                onChange={(e) => setOpponentSchool(e.target.value)}
-                className="flex-1 bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary placeholder:text-muted"
-              />
-              <input
-                type="text"
-                placeholder="Record (e.g. 18-4)"
-                value={opponentRecord}
-                onChange={(e) => setOpponentRecord(e.target.value)}
-                className="flex-1 bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary placeholder:text-muted"
-              />
+              <input type="text" placeholder="School" value={opponentSchool}
+                onChange={(e) => setOpponentSchool(e.target.value)} className={`${inputClass} flex-1`} />
+              <input type="text" placeholder="Record (18-4)" value={opponentRecord}
+                onChange={(e) => setOpponentRecord(e.target.value)} className={`${inputClass} flex-1`} />
             </div>
-            <textarea
-              rows={3}
-              placeholder="Tendencies — e.g. heavy double leg, slow starter"
-              value={opponentTendencies}
-              onChange={(e) => setOpponentTendencies(e.target.value)}
-              className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary placeholder:text-muted resize-none"
-            />
-            <textarea
-              rows={2}
-              placeholder="Psychological notes — e.g. relies on physicality, rattles when pace breaks"
-              value={opponentPsychNotes}
-              onChange={(e) => setOpponentPsychNotes(e.target.value)}
-              className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-primary text-base focus:outline-none focus:border-primary placeholder:text-muted resize-none"
-            />
+            <textarea rows={3} placeholder="Tendencies — heavy double leg, slow starter"
+              value={opponentTendencies} onChange={(e) => setOpponentTendencies(e.target.value)}
+              className={`${inputClass} resize-none`} />
+            <textarea rows={2} placeholder="Psychological notes — rattles when pace breaks early"
+              value={opponentPsychNotes} onChange={(e) => setOpponentPsychNotes(e.target.value)}
+              className={`${inputClass} resize-none`} />
           </div>
         </section>
 
-        {/* ── Save ────────────────────────────────────────────────────────────── */}
+        {/* ── Save button ──────────────────────────────────────────────────────── */}
         {saveError && (
           <p className="text-red-400 text-sm text-center -mb-4">{saveError}</p>
         )}
 
         <button
-          className="w-full py-4 bg-primary text-background font-semibold rounded-2xl min-h-touch active:opacity-80 disabled:opacity-50"
+          className="w-full py-4 rounded-2xl font-black text-lg text-white shadow-blue-sm active:scale-[0.98] transition-transform disabled:opacity-50"
+          style={{
+            background: saveSuccess
+              ? "linear-gradient(135deg, #166534, #16a34a)"
+              : isSaving
+              ? "#1a2744"
+              : "linear-gradient(135deg, #1D4ED8 0%, #2563EB 60%, #1E40AF 100%)",
+          }}
           onClick={handleSave}
           disabled={isSaving || !athleteData}
         >
           {isSaving ? "Saving..." : saveSuccess ? "Saved" : "Save Changes"}
         </button>
 
-        {/* ── Redo Onboarding ──────────────────────────────────────────────────── */}
+        {/* ── Account ─────────────────────────────────────────────────────────── */}
         <section>
-          <p className="text-muted text-xs uppercase tracking-widest mb-4">Account</p>
-          <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-3">
+          <SectionHeader label="Account" />
+          <div className="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4 shadow-card">
+
+            {/* Redo onboarding */}
             <div>
-              <p className="text-primary text-sm font-medium">Redo Onboarding</p>
-              <p className="text-muted text-xs mt-1">
-                Clears your profile and restarts the voice interview. Your sessions and mindset history will be lost.
+              <p className="text-primary text-sm font-bold mb-1">Redo Onboarding</p>
+              <p className="text-muted text-xs leading-relaxed">
+                Clears your profile and restarts the voice interview. Your session history will be lost.
               </p>
             </div>
 
             {isConfirmingReset ? (
-              <div className="flex gap-3 pt-1">
+              <div className="flex gap-3">
                 <button
-                  className="flex-1 py-2.5 border border-border rounded-xl text-muted text-sm"
+                  className="flex-1 py-3 border border-border rounded-xl text-silver text-sm"
                   onClick={() => setIsConfirmingReset(false)}
                   disabled={isResetting}
                 >
                   Cancel
                 </button>
                 <button
-                  className="flex-1 py-2.5 border border-red-500 text-red-400 rounded-xl text-sm disabled:opacity-50"
+                  className="flex-1 py-3 border border-red-500 text-red-400 rounded-xl text-sm font-semibold disabled:opacity-50"
                   onClick={handleRedoOnboarding}
                   disabled={isResetting}
                 >
@@ -464,7 +462,7 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
               </div>
             ) : (
               <button
-                className="py-2.5 border border-border rounded-xl text-muted text-sm w-full"
+                className="py-3 border border-border rounded-xl text-silver text-sm w-full hover:border-border-light transition-colors"
                 onClick={() => setIsConfirmingReset(true)}
               >
                 Redo Onboarding
@@ -473,26 +471,14 @@ export default function Settings({ athleteId, onSignOut, onRedoOnboarding }: Set
           </div>
         </section>
 
-        {/* ── Sign Out ─────────────────────────────────────────────────────────── */}
+        {/* ── Sign out ─────────────────────────────────────────────────────────── */}
         <button
-          className="w-full py-3 text-muted text-sm"
+          className="w-full py-3 text-silver text-sm border border-border rounded-2xl hover:border-border-light transition-colors"
           onClick={onSignOut}
         >
           Sign Out
         </button>
-
       </div>
-    </div>
-  );
-}
-
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function ProfileRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-muted text-sm">{label}</span>
-      <span className="text-primary text-sm font-medium">{value}</span>
     </div>
   );
 }
